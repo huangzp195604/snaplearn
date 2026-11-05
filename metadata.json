@@ -1,0 +1,7 @@
+{
+  "name": "SnapLearn - 拍照学英语小程序",
+  "description": "微信小程序设计与原型：拍照识别真实场景物品，生成引线标注学习卡片、实用句型与口语练习，打造日常沉浸式英语记忆体验。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

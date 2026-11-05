@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SnapLearn - 拍照学英语小程序</title>
+    <meta name="description" content="微信小程序设计与原型：拍照识别真实场景物品，生成引线标注学习卡片、实用句型与口语练习，打造日常沉浸式英语记忆体验。" />
+    <meta property="og:title" content="SnapLearn - 拍照学英语小程序" />
+    <meta property="og:description" content="微信小程序设计与原型：拍照识别真实场景物品，生成引线标注学习卡片、实用句型与口语练习，打造日常沉浸式英语记忆体验。" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        window.addEventListener('error', function(e) {
+          if (
+            (e.filename && e.filename.indexOf('chrome-extension://') !== -1) ||
+            (e.message && (e.message.indexOf('chrome-extension://') !== -1 || e.message.indexOf('Blocked a frame with origin') !== -1))
+          ) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Patrick+Hand&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
