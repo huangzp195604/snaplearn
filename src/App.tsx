@@ -15,6 +15,7 @@ import {
   addAdBonusCredits,
 } from './utils/storage';
 import { analyzeImageWithAI } from './services/api';
+import { compressImage } from './utils/imageCompress';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'card' | 'profile'>('home');
@@ -52,30 +53,22 @@ export default function App() {
     }
     setQuota(loadUserQuota());
 
-    // Convert file to Base64
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
-      setIsLoading(true);
-
-      try {
-        const newCard = await analyzeImageWithAI(base64, file.type);
-        const updatedCards = addCard(newCard);
-        setCards(updatedCards);
-        setSelectedCard(newCard);
-        setActiveTab('card');
-        showToast('✨ 学习卡片与引线海报已成功生成！');
-      } catch (err: any) {
-        console.error('Image analysis error:', err);
-        showToast(err.message || '照片识别与海报生成失败，请稍后重试。');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    reader.onerror = () => {
-      showToast('读取图片文件失败，请重新选择');
-    };
-    reader.readAsDataURL(file);
+    // 压缩后再上传：原图动辄 5-8MB，压缩到 1280px/JPEG85 速度提升数倍
+    setIsLoading(true);
+    try {
+      const base64 = await compressImage(file);
+      const newCard = await analyzeImageWithAI(base64, 'image/jpeg');
+      const updatedCards = addCard(newCard);
+      setCards(updatedCards);
+      setSelectedCard(newCard);
+      setActiveTab('card');
+      showToast('✨ 学习卡片与引线海报已成功生成！');
+    } catch (err: any) {
+      console.error('Image analysis error:', err);
+      showToast(err.message || '照片识别与海报生成失败，请稍后重试。');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSelectCard = (card: LearningCard) => {

@@ -62,6 +62,14 @@ export interface PosterStyle {
   moodNote?: string;
 }
 
+/** 画面主体的包围盒（百分比坐标），用于海报裁切"主体集中" */
+export interface SubjectBBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface LearningCard {
   id: string;
   title: string;
@@ -71,6 +79,8 @@ export interface LearningCard {
   sceneCategory: 'food' | 'coffee' | 'pet' | 'street' | 'supermarket' | 'outfit' | 'study' | 'other';
   /** AI 根据图片内容选定的海报风格（千图千面） */
   posterStyle?: PosterStyle;
+  /** 画面主体包围盒（海报据此裁切构图，让主体集中） */
+  subjectBBox?: SubjectBBox;
   floatingPhrases: FloatingPhrase[];
   detectedItems: DetectedItem[];
   keyVocabulary: KeyVocab[];

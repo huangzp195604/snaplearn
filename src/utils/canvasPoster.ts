@@ -20,6 +20,20 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   // 选定主题与装饰 emoji（AI 决策 → 类别兜底 → 经典黑板）
   const { theme, motifs } = pickPosterTheme(card);
 
+  // 等待手写风格字体就绪（最多 2.5s），保证标题"飘逸"生效
+  try {
+    await Promise.race([
+      Promise.all([
+        document.fonts.load('700 60px Caveat'),
+        document.fonts.load('400 58px Pacifico'),
+        document.fonts.load('400 20px "Patrick Hand"'),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, 2500)),
+    ]);
+  } catch {
+    /* 字体未就绪则回退系统字体，不阻塞海报生成 */
+  }
+
   // Load photo
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
@@ -44,10 +58,10 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   ctx.fillRect(0, 0, width, 720);
 
   // --- TOP HEADER ---
-  // Stylized handwritten English title
+  // Stylized handwritten English title (Pacifico 更飘逸，未加载则回退 Caveat)
   ctx.save();
   ctx.fillStyle = theme.titleColor;
-  ctx.font = 'bold 54px "Caveat", "Brush Script MT", "Segoe Print", cursive, sans-serif';
+  ctx.font = '58px "Pacifico", "Caveat", "Brush Script MT", "Segoe Print", cursive, sans-serif';
   ctx.textAlign = 'left';
   ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
   ctx.shadowBlur = 8;
@@ -108,6 +122,9 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const photoW = width - 120; // 1080
   const photoH = 540;
 
+  // 实际裁切区域（占原图百分比），用于把 AI 识别坐标重映射到裁切后画面
+  let cropRectPct = { x: 0, y: 0, w: 100, h: 100 };
+
   // Clip and draw photo with rounded corners
   ctx.save();
   ctx.beginPath();
@@ -115,18 +132,51 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   ctx.clip();
 
   if (image && image.complete && image.naturalWidth > 0) {
-    // Fill aspect ratio
-    const imgAspect = image.naturalWidth / image.naturalHeight;
     const targetAspect = photoW / photoH;
     let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight;
-    if (imgAspect > targetAspect) {
-      sw = image.naturalHeight * targetAspect;
-      sx = (image.naturalWidth - sw) / 2;
+
+    // 主体集中：优先按 AI 给出的主体包围盒裁切构图（四周留 8% 呼吸空间）
+    const bbox = card.subjectBBox;
+    if (bbox && bbox.w >= 10 && bbox.h >= 10 && bbox.w <= 100 && bbox.h <= 100) {
+      const pad = 8;
+      const bx = Math.max(0, bbox.x - pad);
+      const by = Math.max(0, bbox.y - pad);
+      const bw = Math.min(100 - bx, bbox.w + pad * 2);
+      const bh = Math.min(100 - by, bbox.h + pad * 2);
+      let cropX = (bx / 100) * image.naturalWidth;
+      let cropY = (by / 100) * image.naturalHeight;
+      let cropW = (bw / 100) * image.naturalWidth;
+      let cropH = (bh / 100) * image.naturalHeight;
+      // 裁切区域按照片框长宽比做 cover 适配
+      const cropAspect = cropW / cropH;
+      if (cropAspect > targetAspect) {
+        const newW = cropH * targetAspect;
+        cropX += (cropW - newW) / 2;
+        cropW = newW;
+      } else {
+        const newH = cropW / targetAspect;
+        cropY += (cropH - newH) / 2;
+        cropH = newH;
+      }
+      sx = cropX; sy = cropY; sw = cropW; sh = cropH;
     } else {
-      sh = image.naturalWidth / targetAspect;
-      sy = (image.naturalHeight - sh) / 2;
+      // 无包围盒时退回居中裁切
+      const imgAspect = image.naturalWidth / image.naturalHeight;
+      if (imgAspect > targetAspect) {
+        sw = image.naturalHeight * targetAspect;
+        sx = (image.naturalWidth - sw) / 2;
+      } else {
+        sh = image.naturalWidth / targetAspect;
+        sy = (image.naturalHeight - sh) / 2;
+      }
     }
     ctx.drawImage(image, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
+    cropRectPct = {
+      x: (sx / image.naturalWidth) * 100,
+      y: (sy / image.naturalHeight) * 100,
+      w: (sw / image.naturalWidth) * 100,
+      h: (sh / image.naturalHeight) * 100,
+    };
   } else {
     // Fallback gradient if no photo
     const pGrad = ctx.createLinearGradient(photoX, photoY, photoX + photoW, photoY + photoH);
@@ -179,9 +229,12 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   }
 
   // DRAW LEADER LINES AND LABELS ON PHOTO
+  // 坐标重映射：AI 标注的 x/y 是相对原图的百分比，裁切后需换算到裁切区域
   card.detectedItems.forEach((item) => {
-    const pinX = photoX + (item.x / 100) * photoW;
-    const pinY = photoY + (item.y / 100) * photoH;
+    const rx = Math.min(100, Math.max(0, ((item.x - cropRectPct.x) / cropRectPct.w) * 100));
+    const ry = Math.min(100, Math.max(0, ((item.y - cropRectPct.y) / cropRectPct.h) * 100));
+    const pinX = photoX + (rx / 100) * photoW;
+    const pinY = photoY + (ry / 100) * photoH;
 
     // Determine label target position based on labelSide or manual offset
     let targetX = pinX;
@@ -585,6 +638,16 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not get canvas context');
 
+  // 等待手写字体就绪（最多 2s，未就绪不阻塞）
+  try {
+    await Promise.race([
+      document.fonts.load('700 50px Caveat'),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
+  } catch {
+    /* ignore */
+  }
+
   // Load photo
   const image = await new Promise<HTMLImageElement>((resolve) => {
     const img = new Image();
@@ -668,6 +731,9 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   const photoW = width - 120; // 1080
   const photoH = 680;
 
+  // 实际裁切区域（占原图百分比），用于坐标重映射
+  let cropRectPct = { x: 0, y: 0, w: 100, h: 100 };
+
   // Clip and draw photo with rounded corners
   ctx.save();
   ctx.beginPath();
@@ -675,17 +741,49 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   ctx.clip();
 
   if (image && image.complete && image.naturalWidth > 0) {
-    const imgAspect = image.naturalWidth / image.naturalHeight;
     const targetAspect = photoW / photoH;
     let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight;
-    if (imgAspect > targetAspect) {
-      sw = image.naturalHeight * targetAspect;
-      sx = (image.naturalWidth - sw) / 2;
+
+    // 主体集中：优先按 AI 主体包围盒裁切
+    const bbox = card.subjectBBox;
+    if (bbox && bbox.w >= 10 && bbox.h >= 10 && bbox.w <= 100 && bbox.h <= 100) {
+      const pad = 8;
+      const bx = Math.max(0, bbox.x - pad);
+      const by = Math.max(0, bbox.y - pad);
+      const bw = Math.min(100 - bx, bbox.w + pad * 2);
+      const bh = Math.min(100 - by, bbox.h + pad * 2);
+      let cropX = (bx / 100) * image.naturalWidth;
+      let cropY = (by / 100) * image.naturalHeight;
+      let cropW = (bw / 100) * image.naturalWidth;
+      let cropH = (bh / 100) * image.naturalHeight;
+      const cropAspect = cropW / cropH;
+      if (cropAspect > targetAspect) {
+        const newW = cropH * targetAspect;
+        cropX += (cropW - newW) / 2;
+        cropW = newW;
+      } else {
+        const newH = cropW / targetAspect;
+        cropY += (cropH - newH) / 2;
+        cropH = newH;
+      }
+      sx = cropX; sy = cropY; sw = cropW; sh = cropH;
     } else {
-      sh = image.naturalWidth / targetAspect;
-      sy = (image.naturalHeight - sh) / 2;
+      const imgAspect = image.naturalWidth / image.naturalHeight;
+      if (imgAspect > targetAspect) {
+        sw = image.naturalHeight * targetAspect;
+        sx = (image.naturalWidth - sw) / 2;
+      } else {
+        sh = image.naturalWidth / targetAspect;
+        sy = (image.naturalHeight - sh) / 2;
+      }
     }
     ctx.drawImage(image, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
+    cropRectPct = {
+      x: (sx / image.naturalWidth) * 100,
+      y: (sy / image.naturalHeight) * 100,
+      w: (sw / image.naturalWidth) * 100,
+      h: (sh / image.naturalHeight) * 100,
+    };
   } else {
     const pGrad = ctx.createLinearGradient(photoX, photoY, photoX + photoW, photoY + photoH);
     pGrad.addColorStop(0, '#3a4454');
@@ -719,10 +817,12 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   ctx.roundRect(photoX, photoY, photoW, photoH, 24);
   ctx.stroke();
 
-  // DRAW LEADER LINES AND LABELS ON PHOTO
+  // DRAW LEADER LINES AND LABELS ON PHOTO（坐标重映射到裁切区域）
   card.detectedItems.forEach((item) => {
-    const pinX = photoX + (item.x / 100) * photoW;
-    const pinY = photoY + (item.y / 100) * photoH;
+    const rx = Math.min(100, Math.max(0, ((item.x - cropRectPct.x) / cropRectPct.w) * 100));
+    const ry = Math.min(100, Math.max(0, ((item.y - cropRectPct.y) / cropRectPct.h) * 100));
+    const pinX = photoX + (rx / 100) * photoW;
+    const pinY = photoY + (ry / 100) * photoH;
 
     let targetX = pinX;
     let targetY = pinY;

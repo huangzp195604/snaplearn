@@ -70,6 +70,8 @@ async function callVisionAPIOnce(
       ],
       temperature: 0.7,
       max_tokens: maxTokensFor(model),
+      // 关闭深度思考：海报生成追求速度，82s -> 大幅缩短
+      thinking: { type: 'disabled' },
     }),
   });
 
@@ -355,8 +357,14 @@ app.post('/api/analyze-image', async (req, res) => {
 你是一个专业的“拍照场景化英语教学专家”及视觉设计策划师。
 用户上传了一张日常生活照片（如美食餐盘、咖啡、超市货架、穿搭或宠物）。
 你的任务：
-1. 识别图片中最核心、最具辨识度的 5-8 个物品（Object Detection），精准确定它们在照片中的空间相对位置百分比 (x: 0-100%, y: 0-100%)。
-   注意：x/y 必须落在物体的中心或明显特征点上，并给出最适合引线伸出的方向 (labelSide: 'top-left'|'top-right'|'bottom-left'|'bottom-right'|'left'|'right'|'top'|'bottom')。
+1. 识别图片中最核心、最具辨识度的 4-6 个物品（宁少勿滥，每个物品必须是独特的具体对象）。
+   严格规则：
+   - 禁止输出同一类物品的多个泛称变体（如 pink flower / yellow flower / white flower 都算泛称泛标，改用具体名称如 poppy 虞美人、daisy 雏菊；如果无法区分具体品种，只保留 1 个最具代表性的）
+   - 禁止两个物品的标注点落在重叠区域（物体间距过近时只标注其中一个）
+   - x/y 必须精确落在该物体自身的视觉中心（不是偏左不是偏上），labelSide 尽量互相分散、指向离物体最近的空白边缘，避免标签文字相互遮挡
+   - 同时给出主体包围盒 subjectBBox（画面中主体/视觉焦点所在的矩形区域，百分比坐标）
+   - 精准确定它们在照片中的空间相对位置百分比 (x: 0-100%, y: 0-100%)。
+   - 给出最适合引线伸出的方向 (labelSide: 'top-left'|'top-right'|'bottom-left'|'bottom-right'|'left'|'right'|'top'|'bottom')。
 2. 翻译与标注：
    - 提取精准的地道英文单词（非机械死板的直译，遵循英语母语者的日常称呼）。
    - 提供标准国际音标 (IPA) 和精准简洁的中文释义。
@@ -384,6 +392,7 @@ ${userPrompt ? `用户特别补充要求: ${userPrompt}` : ''}
   "headlineChinese": "中文标题",
   "sceneCategory": "food|coffee|pet|street|supermarket|outfit|study|other",
   "posterStyle": { "theme": "warm-cream|fresh-green|cool-street|soft-pastel|paper-kraft|chalkboard-dark", "motifs": ["🍅", "🥗", "🍞"], "moodNote": "一句话说明选择该风格的理由" },
+  "subjectBBox": { "x": 20, "y": 15, "w": 60, "h": 70 },
   "floatingPhrases": [{ "english": "...", "chinese": "..." }],
   "detectedItems": [{ "id": "item-1", "english": "banana", "chinese": "香蕉", "phonetic": "/bəˈnænə/", "x": 30, "y": 40, "labelSide": "top-left", "curvature": 10 }],
   "keyVocabulary": [{ "english": "...", "chinese": "...", "phonetic": "/.../", "partOfSpeech": "n." }],

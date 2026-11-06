@@ -43,6 +43,18 @@ export async function analyzeImageWithAI(
           moodNote: typeof raw.posterStyle.moodNote === 'string' ? raw.posterStyle.moodNote : undefined,
         }
       : undefined,
+    subjectBBox:
+      raw.subjectBBox &&
+      [raw.subjectBBox.x, raw.subjectBBox.y, raw.subjectBBox.w, raw.subjectBBox.h].every(
+        (n: any) => typeof n === 'number'
+      )
+        ? {
+            x: raw.subjectBBox.x,
+            y: raw.subjectBBox.y,
+            w: raw.subjectBBox.w,
+            h: raw.subjectBBox.h,
+          }
+        : undefined,
     floatingPhrases: raw.floatingPhrases || [],
     detectedItems: (raw.detectedItems || []).map((item: any, idx: number) => ({
       id: item.id || `item-${idx}`,
