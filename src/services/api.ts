@@ -36,6 +36,13 @@ export async function analyzeImageWithAI(
     createdAt: Date.now(),
     imageUrl: imageBase64,
     sceneCategory: raw.sceneCategory || 'food',
+    posterStyle: raw.posterStyle
+      ? {
+          theme: typeof raw.posterStyle.theme === 'string' ? raw.posterStyle.theme : undefined,
+          motifs: Array.isArray(raw.posterStyle.motifs) ? raw.posterStyle.motifs.filter((m: any) => typeof m === 'string') : undefined,
+          moodNote: typeof raw.posterStyle.moodNote === 'string' ? raw.posterStyle.moodNote : undefined,
+        }
+      : undefined,
     floatingPhrases: raw.floatingPhrases || [],
     detectedItems: (raw.detectedItems || []).map((item: any, idx: number) => ({
       id: item.id || `item-${idx}`,

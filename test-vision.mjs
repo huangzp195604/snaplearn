@@ -20,6 +20,11 @@ if (data.card) {
   console.log('\n=== 识别结果 ===');
   console.log('标题:', c.headline, '/', c.headlineChinese);
   console.log('场景:', c.sceneCategory);
+  if (c.posterStyle) {
+    console.log('🎨 海报风格:', c.posterStyle.theme, '| 装饰贴纸:', (c.posterStyle.motifs || []).join(' '), c.posterStyle.moodNote ? `（${c.posterStyle.moodNote}）` : '');
+  } else {
+    console.log('🎨 海报风格: 未返回（前端将按场景类别兜底）');
+  }
   console.log('识别物品 (' + (c.detectedItems || []).length + ' 个):');
   (c.detectedItems || []).forEach((i) => console.log(`  - ${i.english} (${i.chinese}) ${i.phonetic} @(${i.x}%,${i.y}%)`));
   console.log('核心词汇数:', (c.keyVocabulary || []).length, '| 短语数:', (c.naturalPhrases || []).length, '| 句型数:', (c.usefulPatterns || []).length);

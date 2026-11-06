@@ -1,9 +1,11 @@
 import { LearningCard } from '../types';
+import { pickPosterTheme } from './posterThemes';
 
 /**
  * High-definition Canvas Poster Generator
  * Produces a high-res (1200px width) shareable poster
  * with reference image aesthetic, leader lines, learning sections, and mini-program watermark.
+ * 千图千面：主题配色由 AI 依据图片内容选定（见 posterThemes.ts）
  */
 export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanvasElement> {
   const width = 1200;
@@ -14,6 +16,9 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not get canvas context');
+
+  // 选定主题与装饰 emoji（AI 决策 → 类别兜底 → 经典黑板）
+  const { theme, motifs } = pickPosterTheme(card);
 
   // Load photo
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -27,21 +32,21 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
     img.src = card.imageUrl;
   });
 
-  // Background - Warm dark slate / chalkboard textured aesthetic matching reference image top
-  ctx.fillStyle = '#1e242b';
+  // Background - theme-driven
+  ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, width, height);
 
-  // Subtle paper grain / soft gradient on top
+  // Subtle gradient on top
   const headerGrad = ctx.createLinearGradient(0, 0, 0, 720);
-  headerGrad.addColorStop(0, '#15191e');
-  headerGrad.addColorStop(1, '#1f2730');
+  headerGrad.addColorStop(0, theme.headerTop);
+  headerGrad.addColorStop(1, theme.headerBottom);
   ctx.fillStyle = headerGrad;
   ctx.fillRect(0, 0, width, 720);
 
   // --- TOP HEADER ---
   // Stylized handwritten English title
   ctx.save();
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = theme.titleColor;
   ctx.font = 'bold 54px "Caveat", "Brush Script MT", "Segoe Print", cursive, sans-serif';
   ctx.textAlign = 'left';
   ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
@@ -54,24 +59,19 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
   const zhWidth = ctx.measureText(titleZh).width;
   ctx.save();
-  ctx.fillStyle = '#ffd13b';
+  ctx.fillStyle = theme.badgeBg;
   ctx.beginPath();
   ctx.roundRect(60, 115, zhWidth + 36, 44, 22);
   ctx.fill();
 
-  ctx.fillStyle = '#1a1a1a';
+  ctx.fillStyle = theme.badgeText;
   ctx.textAlign = 'left';
   ctx.fillText(titleZh, 78, 145);
   ctx.restore();
 
   // Floating phrases bubbles (on top right like in reference image)
   const phrases = card.floatingPhrases.slice(0, 4);
-  const colors = [
-    { bg: '#8ec07c', text: '#1b2b1a' }, // sage green
-    { bg: '#fabd2f', text: '#2b2208' }, // warm yellow
-    { bg: '#fb4934', text: '#ffffff' }, // energetic red
-    { bg: '#b8bb26', text: '#1d2a13' }, // lime
-  ];
+  const colors = theme.bubbles;
 
   let phraseY = 60;
   phrases.forEach((phrase, i) => {
@@ -130,8 +130,8 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   } else {
     // Fallback gradient if no photo
     const pGrad = ctx.createLinearGradient(photoX, photoY, photoX + photoW, photoY + photoH);
-    pGrad.addColorStop(0, '#3a4454');
-    pGrad.addColorStop(1, '#232b36');
+    pGrad.addColorStop(0, theme.photoFallbackTop);
+    pGrad.addColorStop(1, theme.photoFallbackBottom);
     ctx.fillStyle = pGrad;
     ctx.fillRect(photoX, photoY, photoW, photoH);
   }
@@ -154,6 +154,29 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   ctx.beginPath();
   ctx.roundRect(photoX, photoY, photoW, photoH, 20);
   ctx.stroke();
+
+  // AI 挑选的场景装饰 emoji —— 以贴纸形式点缀在照片四角
+  if (motifs.length > 0) {
+    const corners = [
+      { x: photoX + 18, y: photoY + 18, rot: -0.18 },
+      { x: photoX + photoW - 18, y: photoY + 18, rot: 0.15 },
+      { x: photoX + 18, y: photoY + photoH - 18, rot: 0.2 },
+      { x: photoX + photoW - 18, y: photoY + photoH - 18, rot: -0.14 },
+    ];
+    motifs.slice(0, 4).forEach((emoji, i) => {
+      const c = corners[i];
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(c.rot);
+      ctx.font = '42px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.25)';
+      ctx.shadowBlur = 6;
+      ctx.fillText(emoji, 0, 0);
+      ctx.restore();
+    });
+  }
 
   // DRAW LEADER LINES AND LABELS ON PHOTO
   card.detectedItems.forEach((item) => {
@@ -245,13 +268,13 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const sheetH = height - sheetY - 140; // leave bottom space for watermark
 
   ctx.save();
-  ctx.fillStyle = '#f8f9fa';
+  ctx.fillStyle = theme.sheetBg;
   ctx.beginPath();
   ctx.roundRect(40, sheetY, width - 80, sheetH, 24);
   ctx.fill();
 
   // Border
-  ctx.strokeStyle = '#e2e8f0';
+  ctx.strokeStyle = theme.sheetBorder;
   ctx.lineWidth = 2;
   ctx.stroke();
   ctx.restore();
@@ -261,21 +284,21 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const topRowY = sheetY + 20;
 
   // 01 Key Vocabulary
-  drawSectionBadge(ctx, 60, topRowY, '01', 'Key Vocabulary', '核心词汇', '#ffc107');
+  drawSectionBadge(ctx, 60, topRowY, '01', 'Key Vocabulary', '核心词汇', theme.accents.s1, theme);
   let vocabY = topRowY + 70;
   card.keyVocabulary.slice(0, 7).forEach((vocab) => {
     ctx.save();
-    ctx.fillStyle = '#f59e0b';
+    ctx.fillStyle = theme.accents.s1;
     ctx.beginPath();
     ctx.arc(75, vocabY - 4, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#0f172a';
+    ctx.fillStyle = theme.sectionText;
     ctx.font = 'bold 17px -apple-system, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(vocab.english, 88, vocabY);
 
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = theme.sectionSub;
     ctx.font = '14px -apple-system, sans-serif';
     ctx.fillText(vocab.chinese, 230, vocabY);
     ctx.restore();
@@ -283,21 +306,21 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   });
 
   // 02 Natural Phrases
-  drawSectionBadge(ctx, 60 + colW, topRowY, '02', 'Natural Phrases', '常用短语', '#f87171');
+  drawSectionBadge(ctx, 60 + colW, topRowY, '02', 'Natural Phrases', '常用短语', theme.accents.s2, theme);
   let phraseColY = topRowY + 70;
   card.naturalPhrases.slice(0, 6).forEach((item) => {
     ctx.save();
-    ctx.fillStyle = '#ef4444';
+    ctx.fillStyle = theme.accents.s2;
     ctx.beginPath();
     ctx.arc(60 + colW + 15, phraseColY - 4, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#0f172a';
+    ctx.fillStyle = theme.sectionText;
     ctx.font = 'bold 15px -apple-system, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(item.english, 60 + colW + 28, phraseColY);
 
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = theme.sectionSub;
     ctx.font = '13px -apple-system, sans-serif';
     ctx.fillText(item.chinese, 60 + colW + 28, phraseColY + 18);
     ctx.restore();
@@ -305,21 +328,21 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   });
 
   // 03 Useful Sentence Patterns
-  drawSectionBadge(ctx, 60 + colW * 2, topRowY, '03', 'Useful Sentence Patterns', '实用句型', '#34d399');
+  drawSectionBadge(ctx, 60 + colW * 2, topRowY, '03', 'Useful Sentence Patterns', '实用句型', theme.accents.s3, theme);
   let patternColY = topRowY + 70;
   card.usefulPatterns.slice(0, 5).forEach((p) => {
     ctx.save();
-    ctx.fillStyle = '#10b981';
+    ctx.fillStyle = theme.accents.s3;
     ctx.beginPath();
     ctx.arc(60 + colW * 2 + 15, patternColY - 4, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#0f172a';
+    ctx.fillStyle = theme.sectionText;
     ctx.font = 'bold 15px -apple-system, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(p.pattern, 60 + colW * 2 + 28, patternColY);
 
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = theme.sectionSub;
     ctx.font = '13px -apple-system, sans-serif';
     ctx.fillText(p.meaning, 60 + colW * 2 + 28, patternColY + 18);
     ctx.restore();
@@ -328,7 +351,7 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
 
   // Divider line
   const midRowY = sheetY + 340;
-  ctx.strokeStyle = '#e2e8f0';
+  ctx.strokeStyle = theme.sheetBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(60, midRowY);
@@ -341,9 +364,9 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const bottomRowY = midRowY + 25;
 
   // 04 Scene Description
-  drawSectionBadge(ctx, 60, bottomRowY, '04', 'Scene Description', `场景描述 (${card.sceneDescription.wordCount}词)`, '#fbbf24');
+  drawSectionBadge(ctx, 60, bottomRowY, '04', 'Scene Description', `场景描述 (${card.sceneDescription.wordCount}词)`, theme.accents.s4, theme);
   ctx.save();
-  ctx.fillStyle = '#334155';
+  ctx.fillStyle = theme.sectionText;
   ctx.font = '15px -apple-system, sans-serif';
   ctx.textAlign = 'left';
 
@@ -352,25 +375,25 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
 
   // Chinese translation in subtle box
   const zhBoxY = bottomRowY + 200;
-  ctx.fillStyle = '#f1f5f9';
+  ctx.fillStyle = theme.sheetBg === '#f8f9fa' ? '#f1f5f9' : theme.headerTop;
   ctx.beginPath();
   ctx.roundRect(65, zhBoxY, leftBoxW - 20, 110, 12);
   ctx.fill();
 
-  ctx.fillStyle = '#64748b';
+  ctx.fillStyle = theme.sectionSub;
   ctx.font = '13px -apple-system, sans-serif';
   wrapText(ctx, card.sceneDescription.chinese, 80, zhBoxY + 25, leftBoxW - 50, 20);
   ctx.restore();
 
   // 05 Speaking & Writing Prompts
   const pRightX = 60 + leftBoxW + 30;
-  drawSectionBadge(ctx, pRightX, bottomRowY, '05', 'Speaking & Writing Prompts', '口语与写作练习', '#f87171');
+  drawSectionBadge(ctx, pRightX, bottomRowY, '05', 'Speaking & Writing Prompts', '口语与写作练习', theme.accents.s5, theme);
 
   let promptY = bottomRowY + 75;
   card.prompts.slice(0, 3).forEach((item, idx) => {
     ctx.save();
     // Index Circle
-    ctx.fillStyle = '#ef4444';
+    ctx.fillStyle = theme.accents.s5;
     ctx.beginPath();
     ctx.arc(pRightX + 15, promptY - 4, 12, 0, Math.PI * 2);
     ctx.fill();
@@ -380,12 +403,12 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
     ctx.fillText(`${idx + 1}`, pRightX + 15, promptY);
 
     // Text
-    ctx.fillStyle = '#0f172a';
+    ctx.fillStyle = theme.sectionText;
     ctx.font = 'bold 14px -apple-system, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(item.questionEn, pRightX + 38, promptY - 5);
 
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = theme.sectionSub;
     ctx.font = '12px -apple-system, sans-serif';
     ctx.fillText(item.questionZh, pRightX + 38, promptY + 14);
     ctx.restore();
@@ -422,17 +445,17 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   drawMockQRCode(ctx, qrX, qrY, 80);
 
   // App Title & Tagline
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = theme.titleColor;
   ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText('拍照学英语 · SnapLearn 微信小程序', 60, footerY + 38);
 
-  ctx.fillStyle = '#94a3b8';
+  ctx.fillStyle = theme.watermarkSub;
   ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
   ctx.fillText('认知之物皆为英语教材 | 扫码拍照一键生成你的专属场景英语学习海报', 60, footerY + 68);
 
   ctx.font = '12px -apple-system, sans-serif';
-  ctx.fillStyle = '#64748b';
+  ctx.fillStyle = theme.watermarkSub;
   ctx.fillText('微信长按识别小程序码 · 每天5次免费学习', qrX - 250, footerY + 54);
   ctx.restore();
 
@@ -446,7 +469,8 @@ function drawSectionBadge(
   num: string,
   enTitle: string,
   zhTitle: string,
-  badgeBg: string
+  badgeBg: string,
+  theme: { sectionText: string; sectionSub: string; badgeText: string }
 ) {
   ctx.save();
   // Number Pill
@@ -455,19 +479,19 @@ function drawSectionBadge(
   ctx.roundRect(x, y, 42, 42, 12);
   ctx.fill();
 
-  ctx.fillStyle = '#1e293b';
+  ctx.fillStyle = theme.badgeText;
   ctx.font = 'bold 20px -apple-system, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(num, x + 21, y + 28);
 
   // English Title
-  ctx.fillStyle = '#0f172a';
+  ctx.fillStyle = theme.sectionText;
   ctx.font = 'bold 18px "Caveat", -apple-system, sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText(enTitle, x + 52, y + 20);
 
   // Chinese Title
-  ctx.fillStyle = '#64748b';
+  ctx.fillStyle = theme.sectionSub;
   ctx.font = '13px -apple-system, sans-serif';
   ctx.fillText(zhTitle, x + 52, y + 38);
   ctx.restore();

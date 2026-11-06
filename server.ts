@@ -369,13 +369,21 @@ app.post('/api/analyze-image', async (req, res) => {
    - 04 Scene Description: 45-65 个单词的高水准地道英语小短文，串联上述词汇，附中文。
    - 05 Speaking & Writing Prompts: 3 个口语/写作提问，引导学习者开口或造句。
    - Study Tip: 1 条实用的日常英语记忆锦囊。
+4. 视觉风格决策（posterStyle）：根据照片的色调、光线、内容氛围，从以下 6 个主题中选出最匹配的一个：
+   - "warm-cream"：暖奶油风，适合美食、咖啡、烘焙、brunch 等温暖明亮场景
+   - "fresh-green"：清新绿，适合沙拉、健康餐、超市生鲜、果蔬等自然清新场景
+   - "cool-street"：街拍冷调，适合穿搭、街景、夜景、潮酷等冷色场景
+   - "soft-pastel"：治愈粉彩，适合宠物、花束、甜品等软萌治愈场景
+   - "paper-kraft"：牛皮纸手账风，适合书桌、文具、笔记、书店等学习场景
+   - "chalkboard-dark"：经典黑板风，适合暗调背景、高级餐厅、深夜食堂等深色场景
+   同时挑选 3-4 个与画面内容相关的 emoji 作为海报装饰贴纸（motifs）。
 ${userPrompt ? `用户特别补充要求: ${userPrompt}` : ''}
-严格输出符合结构定义的 JSON。
 严格输出符合以下结构的 JSON（不要输出 JSON 以外的任何文字）：
 {
   "headline": "英文标题",
   "headlineChinese": "中文标题",
   "sceneCategory": "food|coffee|pet|street|supermarket|outfit|study|other",
+  "posterStyle": { "theme": "warm-cream|fresh-green|cool-street|soft-pastel|paper-kraft|chalkboard-dark", "motifs": ["🍅", "🥗", "🍞"], "moodNote": "一句话说明选择该风格的理由" },
   "floatingPhrases": [{ "english": "...", "chinese": "..." }],
   "detectedItems": [{ "id": "item-1", "english": "banana", "chinese": "香蕉", "phonetic": "/bəˈnænə/", "x": 30, "y": 40, "labelSide": "top-left", "curvature": 10 }],
   "keyVocabulary": [{ "english": "...", "chinese": "...", "phonetic": "/.../", "partOfSpeech": "n." }],

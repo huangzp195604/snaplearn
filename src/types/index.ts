@@ -56,6 +56,12 @@ export interface StudyTip {
   tipZh: string;
 }
 
+export interface PosterStyle {
+  theme?: string;
+  motifs?: string[];
+  moodNote?: string;
+}
+
 export interface LearningCard {
   id: string;
   title: string;
@@ -63,6 +69,8 @@ export interface LearningCard {
   createdAt: number;
   imageUrl: string;
   sceneCategory: 'food' | 'coffee' | 'pet' | 'street' | 'supermarket' | 'outfit' | 'study' | 'other';
+  /** AI 根据图片内容选定的海报风格（千图千面） */
+  posterStyle?: PosterStyle;
   floatingPhrases: FloatingPhrase[];
   detectedItems: DetectedItem[];
   keyVocabulary: KeyVocab[];
