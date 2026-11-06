@@ -26,6 +26,7 @@ import { LearningCard, DetectedItem, PracticePrompt } from '../types';
 import { LeadLineOverlay } from '../components/LeadLineOverlay';
 import { CorrectionModal } from '../components/CorrectionModal';
 import { HighDefPosterModal } from '../components/HighDefPosterModal';
+import { SpeechDictateButton } from '../components/SpeechDictateButton';
 import { speakEnglish, stopSpeaking } from '../utils/speech';
 import { generatePosterCanvas, generateAnnotatedPhotoCanvas } from '../utils/canvasPoster';
 
@@ -34,6 +35,22 @@ interface CardDetailViewProps {
   onUpdateCard: (updated: LearningCard) => void;
   onBack: () => void;
 }
+
+/** 海报手写标题：最后两个单词带黄色马克笔高亮下划线 */
+const PosterTitle: React.FC<{ title: string }> = ({ title }) => {
+  const words = title.trim().split(/\s+/);
+  const lead = words.length > 2 ? words.slice(0, -2).join(' ') : '';
+  const tail = words.length > 2 ? words.slice(-2).join(' ') : title;
+  return (
+    <>
+      {lead && <span>{lead} </span>}
+      <span className="relative inline-block">
+        {tail}
+        <span className="absolute -bottom-0.5 left-0 right-0 h-[7px] bg-[#FFD51E] -rotate-1 rounded-sm" />
+      </span>
+    </>
+  );
+};
 
 export const CardDetailView: React.FC<CardDetailViewProps> = ({
   card,
@@ -44,7 +61,14 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
   const [editingItem, setEditingItem] = useState<DetectedItem | null>(null);
   const [isPosterModalOpen, setIsPosterModalOpen] = useState(false);
   const [speechRate, setSpeechRate] = useState<0.75 | 0.9 | 1.0>(0.9);
-  const [speechAccent, setSpeechAccent] = useState<'US' | 'UK'>('US');
+  const [speechAccent, setSpeechAccent] = useState<'US' | 'UK'>(() => {
+    try {
+      const saved = localStorage.getItem('snaplearn_speech_accent');
+      return saved === 'UK' ? 'UK' : 'US';
+    } catch {
+      return 'US';
+    }
+  });
   const [currentlyPlayingText, setCurrentlyPlayingText] = useState<string | null>(null);
   const [isReadingWholeText, setIsReadingWholeText] = useState(false);
 
@@ -59,19 +83,25 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
 
   // Container dimensions for responsive leader lines
   const photoContainerRef = useRef<HTMLDivElement>(null);
-  const [containerDimensions, setContainerDimensions] = useState({ width: 380, height: 260 });
+  const photoImgRef = useRef<HTMLImageElement>(null);
+  // 图片在容器内的实际渲染矩形（完整显示，不裁切）
+  const [photoRect, setPhotoRect] = useState({ left: 0, top: 0, width: 380, height: 260 });
+
+  const updateDimensions = () => {
+    const box = photoContainerRef.current;
+    const img = photoImgRef.current;
+    if (!box) return;
+    const boxRect = box.getBoundingClientRect();
+    const imgRect = img ? img.getBoundingClientRect() : boxRect;
+    setPhotoRect({
+      left: imgRect.left - boxRect.left,
+      top: imgRect.top - boxRect.top,
+      width: imgRect.width || boxRect.width || 380,
+      height: imgRect.height || boxRect.height || 260,
+    });
+  };
 
   useEffect(() => {
-    const updateDimensions = () => {
-      if (photoContainerRef.current) {
-        const rect = photoContainerRef.current.getBoundingClientRect();
-        setContainerDimensions({
-          width: rect.width || 380,
-          height: rect.height || 260,
-        });
-      }
-    };
-
     updateDimensions();
     window.addEventListener('resize', updateDimensions);
     return () => {
@@ -405,84 +435,99 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
       {/* --- THE POSTER CANVAS REPRODUCTION --- */}
       <div className="p-3 sm:p-5 max-w-2xl mx-auto w-full space-y-4">
         {/* Poster Top Chalkboard/Slate Section */}
-        <div className="rounded-3xl bg-[#14181c] border-2 border-[#2b3540] p-4 sm:p-6 shadow-2xl relative overflow-hidden">
+        <div className="rounded-[26px] bg-[#0C0C0E] border border-white/10 p-3 sm:p-5 shadow-2xl relative overflow-hidden">
           {/* Subtle chalk dust background effect */}
-          <div className="absolute inset-0 bg-[radial-gradient(#ffffff0a_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none opacity-60" />
+          <div className="absolute inset-0 bg-[radial-gradient(#ffffff0a_1px,transparent_1px)] [background-size:14px_14px] pointer-events-none opacity-70" />
           <div className="absolute top-0 right-0 w-64 h-64 bg-amber-400/5 rounded-full blur-3xl pointer-events-none" />
 
           {/* Header Title & Floating Badges */}
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4 relative z-10">
-            <div className="space-y-2">
+          <div className="flex items-start justify-between gap-2.5 mb-3 relative z-10">
+            <div className="max-w-[59%]">
               {/* Handwritten English Title */}
               <h2
-                className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight drop-shadow-md"
-                style={{ fontFamily: "'Patrick Hand', 'Caveat', cursive, sans-serif" }}
+                className="text-[27px] sm:text-[40px] font-black text-white leading-[0.95] tracking-tight drop-shadow-[0_3px_6px_rgba(0,0,0,0.55)]"
+                style={{ fontFamily: "'Caveat', 'Patrick Hand', cursive, sans-serif" }}
               >
-                {card.title}
+                <PosterTitle title={card.title} />
               </h2>
-              {/* Yellow highlighter badge for Chinese title */}
-              <div className="inline-block px-3.5 py-1 rounded-full bg-[#FFE500] text-slate-950 font-black text-xs sm:text-sm shadow-md tracking-wider">
-                {card.titleChinese}
+              {/* Yellow brush highlight for Chinese title */}
+              <div className="mt-2.5 inline-block relative -rotate-1">
+                <span className="absolute inset-0 bg-[#FFD51E] rounded-[3px] shadow-[2px_3px_0_rgba(0,0,0,0.35)]" />
+                <span className="relative block px-2.5 py-1 text-[12px] sm:text-[14px] font-black text-[#141414] tracking-wide">
+                  {card.titleChinese}
+                </span>
               </div>
             </div>
 
-            {/* Floating phrase stickers (reference image right badges) */}
-            <div className="flex flex-wrap sm:flex-col items-start sm:items-end gap-1.5 shrink-0">
+            {/* Floating phrase stickers */}
+            <div className="flex flex-col items-end gap-1.5 shrink-0 max-w-[46%]">
               {card.floatingPhrases.slice(0, 4).map((p, idx) => {
-                const colorStyles = [
-                  'bg-[#34D399]/20 text-[#6EE7B7] border-[#059669]',
-                  'bg-[#FBBF24]/20 text-[#FCD34D] border-[#D97706]',
-                  'bg-[#F87171]/20 text-[#FCA5A5] border-[#DC2626]',
-                  'bg-[#2DD4BF]/20 text-[#5EEAD4] border-[#0D9488]',
+                const stickerStyles = [
+                  'bg-[#A8CC3A] text-[#16210A] border-[#7FA326] rotate-2',
+                  'bg-[#FFD93D] text-[#221B00] border-[#E0B400] -rotate-2',
+                  'bg-[#F0562B] text-white border-[#C43E1B] rotate-1',
+                  'bg-[#B9C46B] text-[#1B2208] border-[#8E9A48] -rotate-1',
                 ];
                 return (
                   <div
                     key={idx}
-                    className={`px-3 py-1 rounded-full border text-[11px] font-medium flex flex-col items-start sm:items-end shadow-sm backdrop-blur-sm ${
-                      colorStyles[idx % colorStyles.length]
+                    className={`px-2.5 py-1 rounded-lg border-2 text-left shadow-[2px_3px_0_rgba(0,0,0,0.35)] ${
+                      stickerStyles[idx % stickerStyles.length]
                     }`}
                   >
-                    <span className="font-bold tracking-tight">{p.english}</span>
-                    <span className="text-[10px] opacity-90">{p.chinese}</span>
+                    <div className="text-[11px] font-extrabold leading-tight">{p.english}</div>
+                    <div className="text-[10px] leading-tight opacity-85">{p.chinese}</div>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Photo & Interactive Leader-Line Overlay Area */}
+          {/* Photo & Interactive Leader-Line Overlay Area —— 完整显示原图，不裁切 */}
           <div
             ref={photoContainerRef}
-            className="w-full h-72 sm:h-96 rounded-2xl overflow-hidden relative bg-slate-950 border-2 border-white/15 shadow-[0_8px_30px_rgb(0,0,0,0.8)] group"
+            className="w-full rounded-2xl overflow-hidden relative bg-[#0C0C0E] border border-white/10 shadow-[0_10px_35px_rgba(0,0,0,0.75)] flex items-center justify-center"
           >
             <img
+              ref={photoImgRef}
               src={card.imageUrl}
               alt={card.title}
-              className="w-full h-full object-cover select-none"
-              onLoad={() => {
-                if (photoContainerRef.current) {
-                  const rect = photoContainerRef.current.getBoundingClientRect();
-                  setContainerDimensions({
-                    width: rect.width || 380,
-                    height: rect.height || 260,
-                  });
-                }
+              className="relative block max-w-full max-h-[62vh] w-auto h-auto select-none z-10"
+              onLoad={() => updateDimensions()}
+            />
+
+            {/* Dark vignette to make leader-lines and text pop（只覆盖图片本身） */}
+            <div
+              className="absolute bg-gradient-to-t from-black/50 via-transparent to-black/30 pointer-events-none z-10"
+              style={{
+                left: photoRect.left,
+                top: photoRect.top,
+                width: photoRect.width,
+                height: photoRect.height,
               }}
             />
 
-            {/* Dark vignette to make leader-lines and text pop */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/30 pointer-events-none" />
-
             {/* The core LeadLineOverlay with SVG curved arrows, dots, and words */}
-            <LeadLineOverlay
-              items={card.detectedItems}
-              imageWidth={containerDimensions.width}
-              imageHeight={containerDimensions.height}
-              onUpdateItems={handleUpdateItems}
-              onEditItem={(item) => setEditingItem(item)}
-              isEditingMode={isEditingPins}
-              setIsEditingMode={setIsEditingPins}
-            />
+            <div
+              className="absolute z-20"
+              style={{
+                left: photoRect.left,
+                top: photoRect.top,
+                width: photoRect.width,
+                height: photoRect.height,
+              }}
+            >
+              <LeadLineOverlay
+                items={card.detectedItems}
+                imageWidth={photoRect.width}
+                imageHeight={photoRect.height}
+                onUpdateItems={handleUpdateItems}
+                onEditItem={(item) => setEditingItem(item)}
+                isEditingMode={isEditingPins}
+                setIsEditingMode={setIsEditingPins}
+                accent={speechAccent}
+              />
+            </div>
           </div>
 
           <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300 relative z-10">
@@ -539,9 +584,24 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
         </div>
 
         {/* --- LOWER LEARNING MODULES CONTAINER (Paper-Textured Cream Notebook Style) --- */}
-        <div className="rounded-3xl bg-[#FAF6EC] border-2 border-[#E5DECF] p-4 sm:p-6 space-y-6 shadow-2xl text-slate-800">
+        <div className="rounded-[24px] bg-[#FBF4E2] border border-[#E6D9BE] p-2.5 sm:p-4 space-y-2.5 shadow-xl text-slate-800 relative overflow-hidden">
+          {/* 场景贴纸装饰（参考海报里的手绘贴纸） */}
+          <div className="pointer-events-none absolute top-2 right-3 text-lg opacity-25 select-none">
+            {(card.posterStyle?.motifs?.length ? card.posterStyle.motifs : ['✨', '📷', '🌱'])
+              .slice(0, 3)
+              .map((m, i) => (
+                <span
+                  key={i}
+                  className="inline-block mx-0.5"
+                  style={{ transform: `rotate(${(i - 1) * 12}deg)` }}
+                >
+                  {m}
+                </span>
+              ))}
+          </div>
+
           {/* Web Speech API Pronunciation Practice Toolbar */}
-          <div className="p-3.5 rounded-2xl bg-[#F0E9DA] border border-[#DDD3C0] space-y-2.5">
+          <div className="p-3 rounded-2xl bg-[#F4EBD8] border border-[#E2D6BE] space-y-2.5 relative z-10">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-emerald-600 text-white shadow-sm">
@@ -557,7 +617,11 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
               <div className="flex items-center gap-1.5 text-xs">
                 {/* Accent selector */}
                 <button
-                  onClick={() => setSpeechAccent((prev) => (prev === 'US' ? 'UK' : 'US'))}
+                  onClick={() => {
+                    const next = speechAccent === 'US' ? 'UK' : 'US';
+                    setSpeechAccent(next);
+                    try { localStorage.setItem('snaplearn_speech_accent', next); } catch { /* ignore */ }
+                  }}
                   className="px-2 py-1 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 font-mono text-[11px] shadow-sm transition-colors"
                   title="切换美式/英式发音"
                 >
@@ -628,64 +692,57 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
             )}
           </div>
 
+          {/* 01-03 学习板块（参考海报的彩色编号卡片网格） */}
+          <div className="grid grid-cols-2 gap-2.5 relative z-10">
           {/* 01 Key Vocabulary */}
-          <section className="bg-white/70 p-4 rounded-2xl border border-[#E2D8C3] shadow-xs relative overflow-hidden">
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-full bg-[#FFE500] text-slate-950 font-black text-sm flex items-center justify-center shadow-xs">
-                  01
-                </span>
-                <div>
-                  <h3 className="font-extrabold text-base text-slate-900 tracking-tight flex items-center gap-2">
-                    <span style={{ fontFamily: "'Patrick Hand', cursive, sans-serif" }} className="text-lg">Key Vocabulary</span>
-                    <span className="text-xs text-slate-500 font-bold">核心词汇 (点击发音)</span>
-                  </h3>
-                </div>
+          <section className="bg-[#FFFDF6] p-2.5 rounded-xl border border-[#E7DBC2] shadow-[2px_2px_0_rgba(120,100,60,0.08)] relative overflow-hidden">
+            <div className="flex items-center gap-1.5 mb-2">
+              <span className="w-6 h-6 rounded-md bg-[#FFD51E] text-[#141414] font-black text-[11px] flex items-center justify-center shadow-[1px_2px_0_rgba(0,0,0,0.15)]">
+                01
+              </span>
+              <div className="min-w-0">
+                <div className="font-black text-[13px] leading-tight text-slate-900" style={{ fontFamily: "'Caveat', cursive, sans-serif" }}>Key Vocabulary</div>
+                <div className="text-[9px] text-slate-500 font-bold">核心词汇</div>
               </div>
-              <span className="text-[11px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">{card.keyVocabulary.length} 词</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 gap-1.5">
               {card.keyVocabulary.map((vocab, i) => {
                 const isPlaying = currentlyPlayingText === vocab.english;
                 return (
                   <div
                     key={i}
                     onClick={() => handlePlaySpeech(vocab.english)}
-                    className={`group cursor-pointer p-2.5 rounded-xl border flex items-center justify-between transition-all select-none ${
+                    className={`group cursor-pointer p-1.5 rounded-lg border flex items-center justify-between transition-all select-none ${
                       isPlaying
-                        ? 'bg-amber-100 border-amber-500 ring-2 ring-amber-400 text-slate-950 shadow-sm'
-                        : 'bg-white hover:bg-amber-50/60 border-[#E8DFD0] hover:border-amber-400 shadow-xs'
+                        ? 'bg-amber-100 border-amber-500 ring-1 ring-amber-400 text-slate-950 shadow-sm'
+                        : 'bg-white hover:bg-amber-50/60 border-[#EDE3CE] hover:border-amber-400 shadow-xs'
                     }`}
                   >
-                    <div className="flex flex-col overflow-hidden">
-                      <div className="flex items-center gap-1">
+                    <div className="flex flex-col overflow-hidden min-w-0">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isPlaying ? 'bg-amber-600' : 'bg-[#7BB661]'}`} />
                         <span
-                          className={`font-black text-xs transition-colors ${
+                          className={`font-black text-[11px] truncate transition-colors ${
                             isPlaying ? 'text-amber-900' : 'text-slate-900 group-hover:text-amber-800'
                           }`}
                         >
                           {vocab.english}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono font-medium">{vocab.partOfSpeech}</span>
+                        <span className="text-[9px] text-slate-400 font-mono font-medium">{vocab.partOfSpeech}</span>
                       </div>
-                      <span className="text-[11px] text-slate-600 truncate font-medium">{vocab.chinese}</span>
-                      {vocab.phonetic && (
-                        <span className="text-[10px] text-amber-700 font-mono truncate">
-                          {vocab.phonetic}
-                        </span>
-                      )}
+                      <span className="text-[10px] text-slate-600 truncate font-medium pl-2.5">{vocab.chinese}</span>
                     </div>
 
                     <div
-                      className={`p-1.5 rounded-full transition-colors ${
+                      className={`p-1 rounded-full transition-colors shrink-0 ${
                         isPlaying
                           ? 'bg-amber-400 text-slate-950'
                           : 'text-slate-400 group-hover:text-amber-600 group-hover:bg-amber-100'
                       }`}
                       title="点击发音"
                     >
-                      <Volume2 className={`w-3.5 h-3.5 ${isPlaying ? 'animate-bounce' : ''}`} />
+                      <Volume2 className={`w-3 h-3 ${isPlaying ? 'animate-bounce' : ''}`} />
                     </div>
                   </div>
                 );
@@ -694,56 +751,52 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
           </section>
 
           {/* 02 Natural Phrases */}
-          <section className="bg-white/70 p-4 rounded-2xl border border-[#E2D8C3] shadow-xs">
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-full bg-[#FF4D4F] text-white font-black text-sm flex items-center justify-center shadow-xs">
-                  02
-                </span>
-                <div>
-                  <h3 className="font-extrabold text-base text-slate-900 tracking-tight flex items-center gap-2">
-                    <span style={{ fontFamily: "'Patrick Hand', cursive, sans-serif" }} className="text-lg">Natural Phrases</span>
-                    <span className="text-xs text-slate-500 font-bold">常用短语 (点击跟读)</span>
-                  </h3>
-                </div>
+          <section className="bg-[#FFFDF6] p-2.5 rounded-xl border border-[#E7DBC2] shadow-[2px_2px_0_rgba(120,100,60,0.08)]">
+            <div className="flex items-center gap-1.5 mb-2">
+              <span className="w-6 h-6 rounded-md bg-[#F0562B] text-white font-black text-[11px] flex items-center justify-center shadow-[1px_2px_0_rgba(0,0,0,0.15)]">
+                02
+              </span>
+              <div className="min-w-0">
+                <div className="font-black text-[13px] leading-tight text-slate-900" style={{ fontFamily: "'Caveat', cursive, sans-serif" }}>Natural Phrases</div>
+                <div className="text-[9px] text-slate-500 font-bold">常用短语</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-1.5">
               {card.naturalPhrases.map((phrase, i) => {
                 const isPlaying = currentlyPlayingText === phrase.english;
                 return (
                   <div
                     key={i}
                     onClick={() => handlePlaySpeech(phrase.english)}
-                    className={`group cursor-pointer p-2.5 rounded-xl border flex items-center justify-between transition-all select-none ${
+                    className={`group cursor-pointer p-1.5 rounded-lg border flex items-center justify-between transition-all select-none ${
                       isPlaying
-                        ? 'bg-rose-100 border-rose-500 ring-2 ring-rose-400 text-slate-950 shadow-sm'
-                        : 'bg-white hover:bg-rose-50/60 border-[#E8DFD0] hover:border-rose-400 shadow-xs'
+                        ? 'bg-rose-100 border-rose-500 ring-1 ring-rose-400 text-slate-950 shadow-sm'
+                        : 'bg-white hover:bg-rose-50/60 border-[#EDE3CE] hover:border-rose-400 shadow-xs'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
-                      <div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                      <div className="min-w-0">
                         <div
-                          className={`text-xs font-bold transition-colors ${
+                          className={`text-[11px] font-bold truncate transition-colors ${
                             isPlaying ? 'text-rose-900' : 'text-slate-900 group-hover:text-rose-800'
                           }`}
                         >
                           {phrase.english}
                         </div>
-                        <div className="text-[11px] text-slate-600">{phrase.chinese}</div>
+                        <div className="text-[10px] text-slate-600 truncate">{phrase.chinese}</div>
                       </div>
                     </div>
                     <div
-                      className={`p-1.5 rounded-full transition-colors shrink-0 ml-1 ${
+                      className={`p-1 rounded-full transition-colors shrink-0 ml-1 ${
                         isPlaying
                           ? 'bg-rose-500 text-white'
                           : 'text-slate-400 group-hover:text-rose-600 group-hover:bg-rose-100'
                       }`}
                       title="点击朗读短语"
                     >
-                      <Volume2 className={`w-3.5 h-3.5 ${isPlaying ? 'animate-bounce' : ''}`} />
+                      <Volume2 className={`w-3 h-3 ${isPlaying ? 'animate-bounce' : ''}`} />
                     </div>
                   </div>
                 );
@@ -752,22 +805,18 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
           </section>
 
           {/* 03 Useful Sentence Patterns */}
-          <section className="bg-white/70 p-4 rounded-2xl border border-[#E2D8C3] shadow-xs">
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-full bg-[#10B981] text-white font-black text-sm flex items-center justify-center shadow-xs">
-                  03
-                </span>
-                <div>
-                  <h3 className="font-extrabold text-base text-slate-900 tracking-tight flex items-center gap-2">
-                    <span style={{ fontFamily: "'Patrick Hand', cursive, sans-serif" }} className="text-lg">Useful Sentence Patterns</span>
-                    <span className="text-xs text-slate-500 font-bold">实用句型 (点击朗读)</span>
-                  </h3>
-                </div>
+          <section className="col-span-2 bg-[#FFFDF6] p-2.5 rounded-xl border border-[#E7DBC2] shadow-[2px_2px_0_rgba(120,100,60,0.08)]">
+            <div className="flex items-center gap-1.5 mb-2">
+              <span className="w-6 h-6 rounded-md bg-[#EBD9A8] text-[#3A2E12] font-black text-[11px] flex items-center justify-center shadow-[1px_2px_0_rgba(0,0,0,0.15)]">
+                03
+              </span>
+              <div className="min-w-0">
+                <div className="font-black text-[13px] leading-tight text-slate-900" style={{ fontFamily: "'Caveat', cursive, sans-serif" }}>Useful Sentence Patterns</div>
+                <div className="text-[9px] text-slate-500 font-bold">实用句型</div>
               </div>
             </div>
 
-            <div className="space-y-2.5">
+            <div className="space-y-1.5">
               {card.usefulPatterns.map((pat, i) => {
                 const isPlayingPattern = currentlyPlayingText === pat.pattern;
                 const isPlayingExample = currentlyPlayingText === pat.example;
@@ -775,41 +824,40 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
                 return (
                   <div
                     key={i}
-                    className={`p-3 rounded-xl border transition-all ${
+                    className={`p-2 rounded-lg border transition-all ${
                       isPlayingPattern || isPlayingExample
-                        ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-400/50'
-                        : 'bg-white border-[#E8DFD0] hover:border-emerald-400 shadow-xs'
+                        ? 'bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400/50'
+                        : 'bg-white border-[#EDE3CE] hover:border-emerald-400 shadow-xs'
                     }`}
                   >
                     {/* Pattern Template Row */}
-                    <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        <span className="text-xs font-black text-emerald-800 font-mono tracking-tight">
+                    <div className="flex items-center justify-between gap-1 pb-1.5 border-b border-slate-200">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <span className="text-[11px] font-black text-emerald-800 font-mono tracking-tight">
                           {pat.pattern}
                         </span>
-                        <span className="text-[11px] text-slate-600 font-medium">({pat.meaning})</span>
+                        <span className="text-[10px] text-slate-600 font-medium">({pat.meaning})</span>
                       </div>
 
                       <button
                         onClick={() => handlePlaySpeech(pat.pattern)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold transition-all ${
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition-all shrink-0 ${
                           isPlayingPattern
                             ? 'bg-emerald-500 text-white'
                             : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
                         }`}
                         title="朗读句型框架"
                       >
-                        <Volume2 className={`w-3 h-3 ${isPlayingPattern ? 'animate-bounce' : ''}`} />
-                        <span>句型</span>
+                        <Volume2 className={`w-2.5 h-2.5 ${isPlayingPattern ? 'animate-bounce' : ''}`} />
                       </button>
                     </div>
 
                     {/* Example Sentence Row */}
-                    <div className="pt-2 flex items-center justify-between gap-2">
+                    <div className="pt-1.5 flex items-center justify-between gap-1.5">
                       <div
                         onClick={() => handlePlaySpeech(pat.example)}
-                        className="cursor-pointer group flex-1 text-[11px] text-slate-700 hover:text-slate-950 leading-relaxed"
+                        className="cursor-pointer group flex-1 text-[10px] text-slate-700 hover:text-slate-950 leading-relaxed"
                       >
                         <span className="text-emerald-700 font-bold mr-1">例句:</span>
                         <span
@@ -823,15 +871,15 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
 
                       <button
                         onClick={() => handlePlaySpeech(pat.example)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all shrink-0 ${
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition-all shrink-0 ${
                           isPlayingExample
                             ? 'bg-amber-400 text-slate-950 shadow-xs'
                             : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200'
                         }`}
                         title="朗读完整生活例句"
+                        aria-label="朗读例句"
                       >
-                        <Volume2 className={`w-3 h-3 ${isPlayingExample ? 'animate-bounce' : ''}`} />
-                        <span>读例句</span>
+                        <Volume2 className={`w-2.5 h-2.5 ${isPlayingExample ? 'animate-bounce' : ''}`} />
                       </button>
                     </div>
                   </div>
@@ -839,21 +887,20 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
               })}
             </div>
           </section>
+          </div>
 
+          {/* 04-05 学习板块（左宽右窄，对齐参考海报） */}
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5 relative z-10">
           {/* 04 Scene Description */}
-          <section className="bg-white/70 p-4 rounded-2xl border border-[#E2D8C3] shadow-xs">
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-full bg-[#FFE500] text-slate-950 font-black text-sm flex items-center justify-center shadow-xs">
+          <section className="sm:col-span-3 bg-[#FFFDF6] p-2.5 rounded-xl border border-[#E7DBC2] shadow-[2px_2px_0_rgba(120,100,60,0.08)]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5">
+                <span className="w-6 h-6 rounded-md bg-[#FFD51E] text-[#141414] font-black text-[11px] flex items-center justify-center shadow-[1px_2px_0_rgba(0,0,0,0.15)]">
                   04
                 </span>
-                <div>
-                  <h3 className="font-extrabold text-base text-slate-900 tracking-tight flex items-center gap-2">
-                    <span style={{ fontFamily: "'Patrick Hand', cursive, sans-serif" }} className="text-lg">Scene Description</span>
-                    <span className="text-xs text-slate-500 font-bold">
-                      场景描述 ({card.sceneDescription.wordCount || 55}词)
-                    </span>
-                  </h3>
+                <div className="min-w-0">
+                  <div className="font-black text-[13px] leading-tight text-slate-900" style={{ fontFamily: "'Caveat', cursive, sans-serif" }}>Scene Description</div>
+                  <div className="text-[9px] text-slate-500 font-bold">场景描述 ({card.sceneDescription.wordCount || 55}词)</div>
                 </div>
               </div>
 
@@ -879,8 +926,8 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#FFFDF7] border-2 border-[#EADFC7] shadow-xs space-y-3">
-              <div className="text-sm text-slate-800 leading-relaxed font-serif space-x-1">
+            <div className="p-2.5 rounded-lg bg-[#FFF9EE] border border-[#EADFC7] space-y-1.5">
+              <div className="text-[12px] text-slate-800 leading-relaxed font-serif space-x-1">
                 {card.sceneDescription.english.split(/(?<=[.?!])\s+/).map((sentence, idx) => {
                   const isPlayingSentence = currentlyPlayingText === sentence;
                   return (
@@ -899,44 +946,40 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
                   );
                 })}
               </div>
-              <div className="pt-3 border-t border-[#E8DFD0] text-xs text-slate-600 leading-relaxed font-sans">
+              <div className="mt-1 p-2 rounded-md bg-[#FDE8EC] text-[10px] text-slate-700 leading-relaxed font-sans">
                 {card.sceneDescription.chinese}
               </div>
-              <div className="text-[10px] text-slate-500 italic">
-                💡 提示：点击段落中的任意单句可单独精听，或点击右上角「全篇朗读」连贯听取。
+              <div className="text-[9px] text-slate-500 italic">
+                💡 点击单句可精听，或点右上角「全篇朗读」。
               </div>
             </div>
           </section>
 
           {/* 05 Speaking & Writing Prompts */}
-          <section className="bg-white/70 p-4 rounded-2xl border border-[#E2D8C3] shadow-xs">
-            <div className="flex items-center justify-between mb-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="w-8 h-8 rounded-full bg-[#FF4D4F] text-white font-black text-sm flex items-center justify-center shadow-xs">
-                  05
-                </span>
-                <div>
-                  <h3 className="font-extrabold text-base text-slate-900 tracking-tight flex items-center gap-2">
-                    <span style={{ fontFamily: "'Patrick Hand', cursive, sans-serif" }} className="text-lg">Speaking & Writing Prompts</span>
-                    <span className="text-xs text-slate-500 font-bold">口语与写作练习 (仅3题)</span>
-                  </h3>
-                </div>
+          <section className="sm:col-span-2 bg-[#FFFDF6] p-2.5 rounded-xl border border-[#E7DBC2] shadow-[2px_2px_0_rgba(120,100,60,0.08)]">
+            <div className="flex items-center gap-1.5 mb-2">
+              <span className="w-6 h-6 rounded-md bg-[#F0562B] text-white font-black text-[11px] flex items-center justify-center shadow-[1px_2px_0_rgba(0,0,0,0.15)]">
+                05
+              </span>
+              <div className="min-w-0">
+                <div className="font-black text-[13px] leading-tight text-slate-900" style={{ fontFamily: "'Caveat', cursive, sans-serif" }}>Speaking & Writing</div>
+                <div className="text-[9px] text-slate-500 font-bold">口语与写作练习</div>
               </div>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-1.5">
               {card.prompts.map((prompt) => (
-                <div key={prompt.index} className="p-3.5 rounded-2xl bg-[#FFFDF7] border border-[#EADFC7] shadow-xs space-y-2.5">
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-5 h-5 rounded-full bg-[#FF4D4F] text-white font-bold text-xs flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                <div key={prompt.index} className="p-2 rounded-lg bg-[#FFF9EE] border border-[#EADFC7] space-y-1.5">
+                  <div className="flex items-start gap-1.5">
+                    <span className="w-4 h-4 rounded-full bg-[#F0562B] text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
                       {prompt.index}
                     </span>
-                    <div className="flex-1">
-                      <div className="text-xs font-bold text-slate-900">{prompt.questionEn}</div>
-                      <div className="text-[11px] text-slate-600">{prompt.questionZh}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-bold text-slate-900 leading-snug">{prompt.questionEn}</div>
+                      <div className="text-[9px] text-slate-600 leading-snug">{prompt.questionZh}</div>
                       {prompt.hint && (
-                        <div className="text-[10px] text-amber-800 mt-1 flex items-center gap-1 font-medium">
-                          <Lightbulb className="w-3 h-3 text-amber-600" />
+                        <div className="text-[9px] text-amber-800 mt-0.5 flex items-center gap-1 font-medium">
+                          <Lightbulb className="w-2.5 h-2.5 text-amber-600" />
                           <span>提示: {prompt.hint}</span>
                         </div>
                       )}
@@ -944,29 +987,36 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
                   </div>
 
                   {/* Interactive response field */}
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
                       <input
                         type="text"
                         value={userAnswers[prompt.index] || ''}
                         onChange={(e) =>
                           setUserAnswers((prev) => ({ ...prev, [prompt.index]: e.target.value }))
                         }
-                        placeholder="用英文输入你的回答，或尝试大声说出来..."
-                        className="flex-1 px-3 py-2 bg-white border border-[#DDD3C0] rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-rose-400 shadow-inner"
+                        placeholder="用英文输入你的回答… 或点右侧🎤语音输入"
+                        className="flex-1 min-w-0 px-2 py-1.5 bg-white border border-[#DDD3C0] rounded-lg text-[10px] text-slate-900 placeholder-slate-400 focus:outline-none focus:border-rose-400 shadow-inner"
+                      />
+                      <SpeechDictateButton
+                        size="sm"
+                        value={userAnswers[prompt.index] || ''}
+                        onDictated={(next) =>
+                          setUserAnswers((prev) => ({ ...prev, [prompt.index]: next }))
+                        }
+                        lang={speechAccent === 'UK' ? 'en-GB' : 'en-US'}
                       />
                       <button
                         onClick={() => handleAnswerSubmit(prompt.index)}
-                        className="px-3 py-2 bg-[#FF4D4F] hover:bg-rose-600 text-white font-bold rounded-xl text-xs flex items-center gap-1 transition-colors shadow-xs"
+                        className="px-2 py-1.5 bg-[#F0562B] hover:bg-rose-600 text-white font-bold rounded-lg text-[10px] shrink-0 transition-colors"
                       >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>提交</span>
+                        提交
                       </button>
                     </div>
 
                     {feedbackGiven[prompt.index] && (
-                      <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-xs text-emerald-900 flex items-start gap-2 animate-in fade-in">
-                        <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div className="p-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-[9px] text-emerald-900 flex items-start gap-1.5 animate-in fade-in">
+                        <CheckCircle className="w-3 h-3 text-emerald-600 shrink-0 mt-0.5" />
                         <span className="font-medium">{feedbackGiven[prompt.index]}</span>
                       </div>
                     )}
@@ -975,16 +1025,17 @@ export const CardDetailView: React.FC<CardDetailViewProps> = ({
               ))}
             </div>
           </section>
+          </div>
 
           {/* Study Tip */}
-          <div className="p-4 rounded-2xl bg-[#FFF9E6] border-2 border-[#FFE58F] text-slate-800 text-xs flex items-start gap-3 shadow-xs">
-            <span className="p-1 rounded-full bg-amber-400 text-slate-950 shadow-xs shrink-0 mt-0.5">
-              <Lightbulb className="w-4 h-4" />
+          <div className="p-2.5 rounded-xl bg-[#FFE9A8] border-2 border-[#F5D26B] text-slate-800 text-[11px] flex items-start gap-2 shadow-[2px_2px_0_rgba(120,100,60,0.08)] relative z-10">
+            <span className="p-1 rounded-full bg-[#F0A500] text-white shrink-0 mt-0.5">
+              <Lightbulb className="w-3.5 h-3.5" />
             </span>
-            <div className="space-y-0.5">
-              <div className="font-black text-amber-950 text-xs">{card.studyTip.title}</div>
-              <div className="leading-relaxed font-medium text-slate-800">{card.studyTip.tipEn}</div>
-              <div className="text-[11px] text-slate-600">{card.studyTip.tipZh}</div>
+            <div className="space-y-0.5 min-w-0">
+              <div className="font-black text-amber-950 text-[11px]">{card.studyTip.title}</div>
+              <div className="leading-snug font-medium text-slate-800">{card.studyTip.tipEn}</div>
+              <div className="text-[10px] text-slate-600">{card.studyTip.tipZh}</div>
             </div>
           </div>
         </div>

@@ -122,8 +122,8 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const photoW = width - 120; // 1080
   const photoH = 540;
 
-  // 实际裁切区域（占原图百分比），用于把 AI 识别坐标重映射到裁切后画面
-  let cropRectPct = { x: 0, y: 0, w: 100, h: 100 };
+  // 照片实际绘制区域（contain 完整显示，不裁切），用于把 AI 坐标映射到画面
+  let photoDrawRect = { x: photoX, y: photoY, w: photoW, h: photoH };
 
   // Clip and draw photo with rounded corners
   ctx.save();
@@ -132,51 +132,24 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   ctx.clip();
 
   if (image && image.complete && image.naturalWidth > 0) {
-    const targetAspect = photoW / photoH;
-    let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight;
+    const natW = image.naturalWidth;
+    const natH = image.naturalHeight;
 
-    // 主体集中：优先按 AI 给出的主体包围盒裁切构图（四周留 8% 呼吸空间）
-    const bbox = card.subjectBBox;
-    if (bbox && bbox.w >= 10 && bbox.h >= 10 && bbox.w <= 100 && bbox.h <= 100) {
-      const pad = 8;
-      const bx = Math.max(0, bbox.x - pad);
-      const by = Math.max(0, bbox.y - pad);
-      const bw = Math.min(100 - bx, bbox.w + pad * 2);
-      const bh = Math.min(100 - by, bbox.h + pad * 2);
-      let cropX = (bx / 100) * image.naturalWidth;
-      let cropY = (by / 100) * image.naturalHeight;
-      let cropW = (bw / 100) * image.naturalWidth;
-      let cropH = (bh / 100) * image.naturalHeight;
-      // 裁切区域按照片框长宽比做 cover 适配
-      const cropAspect = cropW / cropH;
-      if (cropAspect > targetAspect) {
-        const newW = cropH * targetAspect;
-        cropX += (cropW - newW) / 2;
-        cropW = newW;
-      } else {
-        const newH = cropW / targetAspect;
-        cropY += (cropH - newH) / 2;
-        cropH = newH;
-      }
-      sx = cropX; sy = cropY; sw = cropW; sh = cropH;
-    } else {
-      // 无包围盒时退回居中裁切
-      const imgAspect = image.naturalWidth / image.naturalHeight;
-      if (imgAspect > targetAspect) {
-        sw = image.naturalHeight * targetAspect;
-        sx = (image.naturalWidth - sw) / 2;
-      } else {
-        sh = image.naturalWidth / targetAspect;
-        sy = (image.naturalHeight - sh) / 2;
-      }
-    }
-    ctx.drawImage(image, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
-    cropRectPct = {
-      x: (sx / image.naturalWidth) * 100,
-      y: (sy / image.naturalHeight) * 100,
-      w: (sw / image.naturalWidth) * 100,
-      h: (sh / image.naturalHeight) * 100,
-    };
+    // 1) 背景：深色渐变衬底（不使用裁切后的同一张图，避免误看成照片被裁）
+    const matte = ctx.createLinearGradient(photoX, photoY, photoX, photoY + photoH);
+    matte.addColorStop(0, theme.photoFallbackTop);
+    matte.addColorStop(1, theme.photoFallbackBottom);
+    ctx.fillStyle = matte;
+    ctx.fillRect(photoX, photoY, photoW, photoH);
+
+    // 2) 原图完整显示（contain）：玻璃杯、柠檬片等边缘物体不再被裁掉
+    const fitScale = Math.min(photoW / natW, photoH / natH);
+    const drawW = natW * fitScale;
+    const drawH = natH * fitScale;
+    const drawX = photoX + (photoW - drawW) / 2;
+    const drawY = photoY + (photoH - drawH) / 2;
+    photoDrawRect = { x: drawX, y: drawY, w: drawW, h: drawH };
+    ctx.drawImage(image, drawX, drawY, drawW, drawH);
   } else {
     // Fallback gradient if no photo
     const pGrad = ctx.createLinearGradient(photoX, photoY, photoX + photoW, photoY + photoH);
@@ -229,12 +202,12 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   }
 
   // DRAW LEADER LINES AND LABELS ON PHOTO
-  // 坐标重映射：AI 标注的 x/y 是相对原图的百分比，裁切后需换算到裁切区域
+  // 坐标映射：AI 标注的 x/y 是相对原图的百分比，映射到 contain 后的实际绘制区域
   card.detectedItems.forEach((item) => {
-    const rx = Math.min(100, Math.max(0, ((item.x - cropRectPct.x) / cropRectPct.w) * 100));
-    const ry = Math.min(100, Math.max(0, ((item.y - cropRectPct.y) / cropRectPct.h) * 100));
-    const pinX = photoX + (rx / 100) * photoW;
-    const pinY = photoY + (ry / 100) * photoH;
+    const rx = Math.min(100, Math.max(0, item.x));
+    const ry = Math.min(100, Math.max(0, item.y));
+    const pinX = photoDrawRect.x + (rx / 100) * photoDrawRect.w;
+    const pinY = photoDrawRect.y + (ry / 100) * photoDrawRect.h;
 
     // Determine label target position based on labelSide or manual offset
     let targetX = pinX;
@@ -271,47 +244,48 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
     ctx.arc(pinX, pinY, 9, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Curved Leader Line (hand-drawn dashed or smooth curve aesthetic)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    // 白色马克笔引线（实线，参考海报）
+    ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2.5;
-    ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(pinX, pinY);
+    ctx.moveTo(targetX, targetY + 26);
 
     const cpX = (pinX + targetX) / 2 + (item.curvature || 0);
     const cpY = (pinY + targetY) / 2 - 15;
-    ctx.quadraticCurveTo(cpX, cpY, targetX, targetY);
+    ctx.quadraticCurveTo(cpX, cpY, pinX, pinY);
     ctx.stroke();
-    ctx.setLineDash([]); // Reset dash
 
-    // Word Bubble (Black translucent pill with white text)
-    ctx.font = 'bold 22px "Caveat", -apple-system, sans-serif';
-    const enWidth = ctx.measureText(item.english).width;
+    // 箭头：指向被标注的物品
+    const angle = Math.atan2(pinY - targetY, pinX - targetX);
+    const ah = 12;
+    ctx.beginPath();
+    ctx.moveTo(pinX - ah * Math.cos(angle - 0.45), pinY - ah * Math.sin(angle - 0.45));
+    ctx.lineTo(pinX, pinY);
+    ctx.lineTo(pinX - ah * Math.cos(angle + 0.45), pinY - ah * Math.sin(angle + 0.45));
+    ctx.stroke();
+
+    // 手写标注文字（无气泡底色，白字 + 黄色中文 + 下划线）
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 10;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 26px "Caveat", -apple-system, sans-serif';
+    ctx.fillText(item.english, targetX, targetY - 4);
+
     ctx.font = '15px -apple-system, sans-serif';
     const zhWidth = ctx.measureText(item.chinese).width;
-    const badgeW = Math.max(enWidth, zhWidth) + 28;
-    const badgeH = 50;
-    const badgeX = targetX - badgeW / 2;
-    const badgeY = targetY - badgeH / 2;
+    ctx.fillStyle = '#FFE58F';
+    ctx.fillText(item.chinese, targetX, targetY + 18);
 
-    ctx.fillStyle = 'rgba(15, 20, 26, 0.88)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    // 中文下方白色短下划线
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
-    ctx.fill();
+    ctx.moveTo(targetX - zhWidth / 2 - 4, targetY + 24);
+    ctx.lineTo(targetX + zhWidth / 2 + 4, targetY + 24);
     ctx.stroke();
-
-    // English word in handwritten cursive/clean style
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px "Caveat", -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(item.english, targetX, badgeY + 22);
-
-    // Chinese meaning
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '14px -apple-system, sans-serif';
-    ctx.fillText(item.chinese, targetX, badgeY + 41);
 
     ctx.restore();
   });
@@ -335,6 +309,20 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   // Grid layout for 01, 02, 03
   const colW = (width - 120) / 3;
   const topRowY = sheetY + 20;
+
+  // 白色学习卡片底（参考海报的彩色编号卡片网格）
+  const topCardH = 324;
+  [0, 1, 2].forEach((i) => {
+    ctx.save();
+    ctx.fillStyle = '#FFFDF6';
+    ctx.strokeStyle = 'rgba(120, 100, 60, 0.16)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(50 + i * colW, topRowY - 12, colW - 16, topCardH, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
 
   // 01 Key Vocabulary
   drawSectionBadge(ctx, 60, topRowY, '01', 'Key Vocabulary', '核心词汇', theme.accents.s1, theme);
@@ -416,6 +404,27 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   const rightBoxW = (width - 150) * 0.48;
   const bottomRowY = midRowY + 25;
 
+  // 底部预留整行 Study Tip 文本框
+  const tipH = 110;
+  const tipY = sheetY + sheetH - 30 - tipH;
+
+  // 04 / 05 白色卡片底（止于 Study Tip 上方）
+  const bottomCardH = tipY - 20 - (bottomRowY - 12);
+  [
+    { x: 50, w: leftBoxW + 10 },
+    { x: 60 + leftBoxW + 20, w: rightBoxW - 6 },
+  ].forEach((c) => {
+    ctx.save();
+    ctx.fillStyle = '#FFFDF6';
+    ctx.strokeStyle = 'rgba(120, 100, 60, 0.16)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(c.x, bottomRowY - 12, c.w, bottomCardH, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+
   // 04 Scene Description
   drawSectionBadge(ctx, 60, bottomRowY, '04', 'Scene Description', `场景描述 (${card.sceneDescription.wordCount}词)`, theme.accents.s4, theme);
   ctx.save();
@@ -426,16 +435,26 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
   // Wrap English text
   wrapText(ctx, card.sceneDescription.english, 70, bottomRowY + 75, leftBoxW - 30, 22);
 
-  // Chinese translation in subtle box
-  const zhBoxY = bottomRowY + 200;
-  ctx.fillStyle = theme.sheetBg === '#f8f9fa' ? '#f1f5f9' : theme.headerTop;
+  // 中文翻译框（高度按实际行数自适应，逐段换行）
+  const zhBoxY = bottomRowY + 205;
+  ctx.font = '13px -apple-system, sans-serif';
+  const zhLines = layoutText(ctx, card.sceneDescription.chinese, leftBoxW - 55);
+  const zhBoxH = Math.max(110, zhLines.length * 20 + 28);
+
+  ctx.fillStyle =
+    theme.sheetBg === '#FBF4E2'
+      ? '#FDE8EC'
+      : theme.sheetBg === '#f8f9fa'
+      ? '#f1f5f9'
+      : theme.headerTop;
   ctx.beginPath();
-  ctx.roundRect(65, zhBoxY, leftBoxW - 20, 110, 12);
+  ctx.roundRect(65, zhBoxY, leftBoxW - 20, zhBoxH, 12);
   ctx.fill();
 
   ctx.fillStyle = theme.sectionSub;
-  ctx.font = '13px -apple-system, sans-serif';
-  wrapText(ctx, card.sceneDescription.chinese, 80, zhBoxY + 25, leftBoxW - 50, 20);
+  zhLines.forEach((line, i) => {
+    ctx.fillText(line, 80, zhBoxY + 26 + i * 20);
+  });
   ctx.restore();
 
   // 05 Speaking & Writing Prompts
@@ -469,24 +488,37 @@ export async function generatePosterCanvas(card: LearningCard): Promise<HTMLCanv
     promptY += 46;
   });
 
-  // Study Tip box
-  const tipY = promptY + 15;
+  // --- 海报底部整行 Study Tip 文本框 ---
+  const tipX = 60;
+  const tipW = width - 120;
   ctx.save();
-  ctx.fillStyle = '#fef3c7';
-  ctx.strokeStyle = '#fde68a';
-  ctx.lineWidth = 1;
+  ctx.fillStyle = theme.sheetBg === '#FBF4E2' ? '#FFE9A8' : '#fef3c7';
+  ctx.strokeStyle = theme.sheetBg === '#FBF4E2' ? '#F5D26B' : '#fde68a';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(pRightX, tipY, rightBoxW - 20, 85, 12);
+  ctx.roundRect(tipX, tipY, tipW, tipH, 14);
   ctx.fill();
   ctx.stroke();
 
+  // 灯泡图标
+  ctx.font = '20px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('💡', tipX + 18, tipY + 32);
+
   ctx.fillStyle = '#b45309';
-  ctx.font = 'bold 13px -apple-system, sans-serif';
-  ctx.fillText('💡 Study Tip 学习建议', pRightX + 16, tipY + 24);
+  ctx.font = 'bold 16px -apple-system, "PingFang SC", sans-serif';
+  ctx.fillText(card.studyTip.title, tipX + 46, tipY + 32);
 
   ctx.fillStyle = '#78350f';
-  ctx.font = '12px -apple-system, sans-serif';
-  wrapText(ctx, `${card.studyTip.tipEn} (${card.studyTip.tipZh})`, pRightX + 16, tipY + 46, rightBoxW - 50, 18);
+  ctx.font = '14px -apple-system, "PingFang SC", sans-serif';
+  wrapText(
+    ctx,
+    `${card.studyTip.tipEn} （${card.studyTip.tipZh}）`,
+    tipX + 20,
+    tipY + 60,
+    tipW - 40,
+    22
+  );
   ctx.restore();
 
   // --- BOTTOM WATERMARK & WECHAT MINI-PROGRAM QR FOR VIRAL SHARING ---
@@ -532,7 +564,13 @@ function drawSectionBadge(
   ctx.roundRect(x, y, 42, 42, 12);
   ctx.fill();
 
-  ctx.fillStyle = theme.badgeText;
+  // 浅色徽章用深色数字，深色徽章用白色数字
+  const hex = badgeBg.replace('#', '');
+  const lum =
+    0.299 * parseInt(hex.slice(0, 2), 16) +
+    0.587 * parseInt(hex.slice(2, 4), 16) +
+    0.114 * parseInt(hex.slice(4, 6), 16);
+  ctx.fillStyle = lum > 165 ? theme.badgeText : '#ffffff';
   ctx.font = 'bold 20px -apple-system, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(num, x + 21, y + 28);
@@ -550,6 +588,46 @@ function drawSectionBadge(
   ctx.restore();
 }
 
+/** 按行宽排版：英文按单词断行，中文按字断行（解决中文一行溢出） */
+function layoutText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const tokens: string[] = [];
+  let latin = '';
+  for (const ch of text) {
+    const isCJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/.test(ch);
+    if (isCJK) {
+      if (latin.trim()) tokens.push(latin.trim());
+      latin = '';
+      tokens.push(ch);
+    } else if (ch === ' ') {
+      if (latin.trim()) tokens.push(latin.trim());
+      latin = '';
+      tokens.push(' ');
+    } else {
+      latin += ch;
+    }
+  }
+  if (latin.trim()) tokens.push(latin.trim());
+
+  const lines: string[] = [];
+  let line = '';
+  for (const token of tokens) {
+    if (token === ' ' && !line) continue;
+    const test = line + token;
+    if (ctx.measureText(test).width > maxWidth && line.trim()) {
+      lines.push(line.trimEnd());
+      line = token === ' ' ? '' : token;
+    } else {
+      line = test;
+    }
+  }
+  if (line.trim()) lines.push(line.trimEnd());
+  return lines;
+}
+
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -557,24 +635,10 @@ function wrapText(
   y: number,
   maxWidth: number,
   lineHeight: number
-) {
-  const words = text.split(' ');
-  let line = '';
-  let curY = y;
-
-  for (let n = 0; n < words.length; n++) {
-    const testLine = line + words[n] + ' ';
-    const metrics = ctx.measureText(testLine);
-    const testWidth = metrics.width;
-    if (testWidth > maxWidth && n > 0) {
-      ctx.fillText(line, x, curY);
-      line = words[n] + ' ';
-      curY += lineHeight;
-    } else {
-      line = testLine;
-    }
-  }
-  ctx.fillText(line, x, curY);
+): number {
+  const lines = layoutText(ctx, text, maxWidth);
+  lines.forEach((line, i) => ctx.fillText(line, x, y + i * lineHeight));
+  return lines.length;
 }
 
 function drawMockQRCode(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
@@ -731,8 +795,8 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   const photoW = width - 120; // 1080
   const photoH = 680;
 
-  // 实际裁切区域（占原图百分比），用于坐标重映射
-  let cropRectPct = { x: 0, y: 0, w: 100, h: 100 };
+  // 照片实际绘制区域（contain 完整显示，不裁切），用于坐标重映射
+  let photoDrawRect = { x: photoX, y: photoY, w: photoW, h: photoH };
 
   // Clip and draw photo with rounded corners
   ctx.save();
@@ -741,49 +805,24 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   ctx.clip();
 
   if (image && image.complete && image.naturalWidth > 0) {
-    const targetAspect = photoW / photoH;
-    let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight;
+    const natW = image.naturalWidth;
+    const natH = image.naturalHeight;
 
-    // 主体集中：优先按 AI 主体包围盒裁切
-    const bbox = card.subjectBBox;
-    if (bbox && bbox.w >= 10 && bbox.h >= 10 && bbox.w <= 100 && bbox.h <= 100) {
-      const pad = 8;
-      const bx = Math.max(0, bbox.x - pad);
-      const by = Math.max(0, bbox.y - pad);
-      const bw = Math.min(100 - bx, bbox.w + pad * 2);
-      const bh = Math.min(100 - by, bbox.h + pad * 2);
-      let cropX = (bx / 100) * image.naturalWidth;
-      let cropY = (by / 100) * image.naturalHeight;
-      let cropW = (bw / 100) * image.naturalWidth;
-      let cropH = (bh / 100) * image.naturalHeight;
-      const cropAspect = cropW / cropH;
-      if (cropAspect > targetAspect) {
-        const newW = cropH * targetAspect;
-        cropX += (cropW - newW) / 2;
-        cropW = newW;
-      } else {
-        const newH = cropW / targetAspect;
-        cropY += (cropH - newH) / 2;
-        cropH = newH;
-      }
-      sx = cropX; sy = cropY; sw = cropW; sh = cropH;
-    } else {
-      const imgAspect = image.naturalWidth / image.naturalHeight;
-      if (imgAspect > targetAspect) {
-        sw = image.naturalHeight * targetAspect;
-        sx = (image.naturalWidth - sw) / 2;
-      } else {
-        sh = image.naturalWidth / targetAspect;
-        sy = (image.naturalHeight - sh) / 2;
-      }
-    }
-    ctx.drawImage(image, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
-    cropRectPct = {
-      x: (sx / image.naturalWidth) * 100,
-      y: (sy / image.naturalHeight) * 100,
-      w: (sw / image.naturalWidth) * 100,
-      h: (sh / image.naturalHeight) * 100,
-    };
+    // 1) 深色衬底（不使用裁切后的同一张图，避免误看成照片被裁）
+    const matte = ctx.createLinearGradient(photoX, photoY, photoX, photoY + photoH);
+    matte.addColorStop(0, '#3a4454');
+    matte.addColorStop(1, '#232b36');
+    ctx.fillStyle = matte;
+    ctx.fillRect(photoX, photoY, photoW, photoH);
+
+    // 2) 原图完整显示（contain），边缘物体不再被裁掉
+    const fitScale = Math.min(photoW / natW, photoH / natH);
+    const drawW = natW * fitScale;
+    const drawH = natH * fitScale;
+    const drawX = photoX + (photoW - drawW) / 2;
+    const drawY = photoY + (photoH - drawH) / 2;
+    photoDrawRect = { x: drawX, y: drawY, w: drawW, h: drawH };
+    ctx.drawImage(image, drawX, drawY, drawW, drawH);
   } else {
     const pGrad = ctx.createLinearGradient(photoX, photoY, photoX + photoW, photoY + photoH);
     pGrad.addColorStop(0, '#3a4454');
@@ -817,12 +856,12 @@ export async function generateAnnotatedPhotoCanvas(card: LearningCard): Promise<
   ctx.roundRect(photoX, photoY, photoW, photoH, 24);
   ctx.stroke();
 
-  // DRAW LEADER LINES AND LABELS ON PHOTO（坐标重映射到裁切区域）
+  // DRAW LEADER LINES AND LABELS ON PHOTO（坐标映射到 contain 后的实际绘制区域）
   card.detectedItems.forEach((item) => {
-    const rx = Math.min(100, Math.max(0, ((item.x - cropRectPct.x) / cropRectPct.w) * 100));
-    const ry = Math.min(100, Math.max(0, ((item.y - cropRectPct.y) / cropRectPct.h) * 100));
-    const pinX = photoX + (rx / 100) * photoW;
-    const pinY = photoY + (ry / 100) * photoH;
+    const rx = Math.min(100, Math.max(0, item.x));
+    const ry = Math.min(100, Math.max(0, item.y));
+    const pinX = photoDrawRect.x + (rx / 100) * photoDrawRect.w;
+    const pinY = photoDrawRect.y + (ry / 100) * photoDrawRect.h;
 
     let targetX = pinX;
     let targetY = pinY;

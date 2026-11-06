@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+/* === 语音按钮 Focus 模式的 input 高亮脉冲动画 === */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes speechPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); border-color: rgb(245, 158, 11); }
+  50%  { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); border-color: rgb(251, 191, 36); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); border-color: rgb(221, 211, 192); }
+}
+
+input.speech-pulse-focus {
+  animation: speechPulse 1.5s ease-out 1;
+  border-color: rgb(245, 158, 11) !important;
+}

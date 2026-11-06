@@ -38,10 +38,15 @@ function getAIClient(clientApiKey?: string) {
 // 支持智谱 GLM-4V / 阿里 Qwen-VL / 硅基流动 等任何 OpenAI 兼容的视觉模型
 // 通过 .env 中 VISION_API_KEY / VISION_API_BASE / VISION_MODEL 配置
 // 内置模型备胎链：一个模型限流(429)自动尝试下一个
-const VISION_MODEL_CHAIN = (process.env.VISION_MODEL
-  ? [process.env.VISION_MODEL]
-  : ['glm-4.6v-flash', 'glm-4.1v-thinking-flash', 'glm-4v-plus', 'glm-4v-flash']
-).concat(['glm-4.1v-thinking-flash', 'glm-4v-plus', 'glm-4v-flash']);
+// glm-4.5v 的空间定位（bbox）精度明显优于 flash 系列，放在首位
+const VISION_MODEL_CHAIN = [
+  'glm-4.5v',
+  ...(process.env.VISION_MODEL ? [process.env.VISION_MODEL] : []),
+  'glm-4.6v-flash',
+  'glm-4.1v-thinking-flash',
+  'glm-4v-plus',
+  'glm-4v-flash',
+];
 
 async function callVisionAPIOnce(
   apiKey: string,
@@ -89,11 +94,11 @@ async function callVisionAPIOnce(
 }
 
 // 带备胎链的视觉模型调用：遍历候选模型，限流/输出截断/失败自动降级到下一个
-async function callVisionAPI(
+async function callVisionRaw(
+  promptText: string,
   imageBase64: string,
-  mimeType: string,
-  promptText: string
-): Promise<{ cardData: any; model: string }> {
+  mimeType: string
+): Promise<{ content: string; model: string }> {
   const apiKey = process.env.VISION_API_KEY as string;
   const baseUrl = (process.env.VISION_API_BASE || 'https://open.bigmodel.cn/api/paas/v4').replace(/\/$/, '');
 
@@ -104,8 +109,7 @@ async function callVisionAPI(
   for (const model of models) {
     try {
       const content = await callVisionAPIOnce(apiKey, baseUrl, model, imageBase64, mimeType, promptText);
-      const cardData = extractJson(content); // 输出被截断导致 JSON 残缺时，同样换下一个模型
-      return { cardData, model };
+      return { content, model };
     } catch (err: any) {
       errors.push(`${model}: ${err.message}`);
       console.warn(`[SnapLearn] 视觉模型 ${model} 失败，尝试下一个 ->`, err.message?.slice(0, 120));
@@ -128,7 +132,28 @@ function extractJson(text: string): any {
   // 模型偶尔会在 JSON 字符串值里输出裸换行/制表符，JSON.parse 会报
   // "Bad control character"，这里统一替换成空格再解析
   jsonStr = jsonStr.replace(/[\u0000-\u001F]+/g, ' ');
+  // 视觉模型经常把 bbox 写坏：{"x":176,54,270,442} 或 {"x":177,"54,"w":158,"h":416}
+  jsonStr = repairBboxObjects(jsonStr);
+  jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
   return JSON.parse(jsonStr);
+}
+
+/** 修复被模型写坏的 bbox 对象：允许键丢失、数字被误加引号、裸数字按 x/y/w/h 顺序补齐 */
+function repairBboxObjects(text: string): string {
+  return text.replace(/((?:"bbox"|"subjectBBox")\s*:\s*)\{([^{}]*)\}/g, (_m, prefix, body: string) => {
+    const cleaned = body.replace(/"\s*(-?\d+(?:\.\d+)?)\s*"/g, '$1');
+    const vals: Record<string, number> = {};
+    const rest = cleaned.replace(/([xywh])\s*:\s*(-?\d+(?:\.\d+)?)/g, (_m2, k: string, v: string) => {
+      vals[k] = Number(v);
+      return ' ';
+    });
+    const nums = (rest.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+    for (const k of ['x', 'y', 'w', 'h']) {
+      if (vals[k] === undefined && nums.length) vals[k] = nums.shift() as number;
+    }
+    const fixed = { x: vals.x ?? 0, y: vals.y ?? 0, w: vals.w ?? 0, h: vals.h ?? 0 };
+    return `${prefix}${JSON.stringify(fixed)}`;
+  });
 }
 
 // 各模型的 max_tokens 上限不同，超了直接 400
@@ -136,6 +161,124 @@ function maxTokensFor(model: string): number {
   if (model.includes('glm-4v-plus')) return 2048;
   if (model.includes('glm-4v-flash') && !model.includes('thinking') && !model.includes('4.6') && !model.includes('4.1')) return 1024;
   return 8192;
+}
+
+// ============ 独立「视觉定位」阶段 ============
+// 大而全的 JSON 生成会让模型把注意力放在文案上，坐标只能是"大概齐"。
+// 这里拆成一次只做定位的调用，输出格式极简，坐标精度显著提升。
+const GROUNDING_PROMPT = (userPrompt = '') => `
+你是视觉定位专家。请在这张用户上传的真实生活照片中，定位 4-6 个最适合教学标注的独立物体（必须是具体可辨识的单一物体，不要泛称变体，两个物体的包围盒不要重叠）。
+坐标使用 0-1000 归一化：左上角 (0,0)，右下角 (1000,1000)；x/y 是包围盒左上角，w/h 是宽高。
+先在心里判断物体在画面中的实际位置，再给出刚好包住它的紧密包围盒（只覆盖物体可见像素，不要包含背景或相邻物体）。
+严格按下面格式逐行输出，每行一个物体，不要输出 JSON、不要输出任何解释文字：
+english | chinese | phonetic | x y w h
+第一列 english 必须是**纯英文**（只允许 a-z A-Z 空格和连字符，绝不允许出现中文字符），第二列 chinese 必须是简体中文，第三列 phonetic 是 IPA 音标（可留空）。
+示例：
+chimney | 烟囱 | /ˈtʃɪmni/ | 176 54 270 442
+front wheel | 前轮 |  | 102 662 343 332
+${userPrompt ? `用户补充要求：${userPrompt}` : ''}
+`;
+
+function clampNum(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+/** 解析定位模型的输出（兼容逐行竖线格式与 JSON），并统一换算成百分比坐标 */
+function parseGroundingText(text: string): Array<{
+  english: string;
+  chinese: string;
+  phonetic: string;
+  box: { x: number; y: number; w: number; h: number };
+}> {
+  const raw: Array<{ english: string; chinese: string; phonetic: string; box: any }> = [];
+
+  // 1) 万一模型还是输出了 JSON
+  try {
+    const json = extractJson(text);
+    const arr = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
+    arr.forEach((it: any) =>
+      raw.push({
+        english: it.english,
+        chinese: it.chinese,
+        phonetic: it.phonetic,
+        box: it.bbox || it,
+      })
+    );
+  } catch {
+    /* 不是 JSON，走逐行解析 */
+  }
+
+  // 2) 逐行竖线格式
+  if (!raw.length) {
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.includes('|')) continue;
+      const parts = line
+        .replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, '')
+        .split('|')
+        .map((s) => s.trim());
+      if (parts.length < 3) continue;
+      const nums = (parts[parts.length - 1].match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+      if (nums.length < 4) continue;
+      raw.push({
+        english: parts[0],
+        chinese: parts[1],
+        phonetic: parts[2],
+        box: { x: nums[0], y: nums[1], w: nums[2], h: nums[3] },
+      });
+    }
+  }
+
+  if (!raw.length) return [];
+
+  // 全局判定坐标尺度：0-1000 归一化 / 0-100 百分比 / 0-1
+  let maxV = 0;
+  raw.forEach((r) => {
+    ['x', 'y', 'w', 'h'].forEach((k) => {
+      const n = Number(r.box?.[k]);
+      if (Number.isFinite(n)) maxV = Math.max(maxV, n);
+    });
+  });
+  const scale = maxV > 105 ? 0.1 : maxV > 1.5 ? 1 : 100;
+
+  const out: Array<{ english: string; chinese: string; phonetic: string; box: { x: number; y: number; w: number; h: number } }> = [];
+  for (const r of raw) {
+    const b = r.box;
+    if (!b || !['x', 'y', 'w', 'h'].every((k) => Number.isFinite(Number(b[k])))) continue;
+    let x = Number(b.x) * scale;
+    let y = Number(b.y) * scale;
+    let w = Number(b.w) * scale;
+    let h = Number(b.h) * scale;
+    if (w < 0) {
+      x += w;
+      w = -w;
+    }
+    if (h < 0) {
+      y += h;
+      h = -h;
+    }
+    x = clampNum(x, 0, 98);
+    y = clampNum(y, 0, 98);
+    w = clampNum(w, 2, 100 - x);
+    h = clampNum(h, 2, 100 - y);
+    const english = String(r.english || '').trim();
+    if (!english) continue;
+    out.push({
+      english,
+      chinese: String(r.chinese || '').trim(),
+      phonetic: String(r.phonetic || '').trim(),
+      box: { x, y, w, h },
+    });
+  }
+  return out;
+}
+
+/** 由包围盒位置自动决定标签伸出方向，避免标签互相压在一起 */
+function pickLabelSide(box: { x: number; y: number; w: number; h: number }): string {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  if (cy < 36) return 'bottom';
+  if (cy > 64) return 'top';
+  return cx < 50 ? 'left' : 'right';
 }
 
 // Response schema for structured card generation
@@ -176,15 +319,26 @@ const cardAnalysisSchema = {
           english: { type: Type.STRING, description: 'Single noun or short item name (e.g. banana, toast, bacon, salad)' },
           chinese: { type: Type.STRING, description: 'Accurate everyday Chinese translation' },
           phonetic: { type: Type.STRING, description: 'IPA phonetic representation, e.g. /bəˈnænə/' },
-          x: { type: Type.NUMBER, description: 'Horizontal center percentage of object inside photo (0 to 100)' },
-          y: { type: Type.NUMBER, description: 'Vertical center percentage of object inside photo (0 to 100)' },
+          x: { type: Type.NUMBER, description: 'Horizontal center percentage of the object bbox (0 to 100), relative to the FULL original photo' },
+          y: { type: Type.NUMBER, description: 'Vertical center percentage of the object bbox (0 to 100), relative to the FULL original photo' },
+          bbox: {
+            type: Type.OBJECT,
+            description: 'Tight bounding box around the object itself, percentage coordinates of the FULL original photo',
+            properties: {
+              x: { type: Type.NUMBER },
+              y: { type: Type.NUMBER },
+              w: { type: Type.NUMBER },
+              h: { type: Type.NUMBER },
+            },
+            required: ['x', 'y', 'w', 'h'],
+          },
           labelSide: {
             type: Type.STRING,
             description: 'Best quadrant for the leader line and text: top-left, top-right, bottom-left, bottom-right, left, right, top, or bottom',
           },
           curvature: { type: Type.NUMBER, description: 'Leader line curvature offset between -40 and 40' },
         },
-        required: ['id', 'english', 'chinese', 'phonetic', 'x', 'y', 'labelSide'],
+        required: ['id', 'english', 'chinese', 'phonetic', 'x', 'y', 'bbox', 'labelSide'],
       },
     },
     keyVocabulary: {
@@ -361,9 +515,11 @@ app.post('/api/analyze-image', async (req, res) => {
    严格规则：
    - 禁止输出同一类物品的多个泛称变体（如 pink flower / yellow flower / white flower 都算泛称泛标，改用具体名称如 poppy 虞美人、daisy 雏菊；如果无法区分具体品种，只保留 1 个最具代表性的）
    - 禁止两个物品的标注点落在重叠区域（物体间距过近时只标注其中一个）
-   - x/y 必须精确落在该物体自身的视觉中心（不是偏左不是偏上），labelSide 尽量互相分散、指向离物体最近的空白边缘，避免标签文字相互遮挡
+   - 每个物品必须给出 bbox（物体本身的紧密包围盒，w/h 只覆盖该物体的可见像素，不能把背景或相邻物品框进去）
+   - x/y 必须等于该 bbox 的几何中心，且中心点必须落在物体可见像素上；宁可框小一点，也不要把箭头指到桌面/墙面/背景
+   - 所有坐标（含 bbox、subjectBBox）一律使用相对**整张上传原图**的百分比：左上角为 (0,0)，右下角为 (100,100)，不要相对任何裁切区域
+   - labelSide 尽量互相分散、指向离物体最近的空白边缘，避免标签文字相互遮挡
    - 同时给出主体包围盒 subjectBBox（画面中主体/视觉焦点所在的矩形区域，百分比坐标）
-   - 精准确定它们在照片中的空间相对位置百分比 (x: 0-100%, y: 0-100%)。
    - 给出最适合引线伸出的方向 (labelSide: 'top-left'|'top-right'|'bottom-left'|'bottom-right'|'left'|'right'|'top'|'bottom')。
 2. 翻译与标注：
    - 提取精准的地道英文单词（非机械死板的直译，遵循英语母语者的日常称呼）。
@@ -394,7 +550,7 @@ ${userPrompt ? `用户特别补充要求: ${userPrompt}` : ''}
   "posterStyle": { "theme": "warm-cream|fresh-green|cool-street|soft-pastel|paper-kraft|chalkboard-dark", "motifs": ["🍅", "🥗", "🍞"], "moodNote": "一句话说明选择该风格的理由" },
   "subjectBBox": { "x": 20, "y": 15, "w": 60, "h": 70 },
   "floatingPhrases": [{ "english": "...", "chinese": "..." }],
-  "detectedItems": [{ "id": "item-1", "english": "banana", "chinese": "香蕉", "phonetic": "/bəˈnænə/", "x": 30, "y": 40, "labelSide": "top-left", "curvature": 10 }],
+  "detectedItems": [{ "id": "item-1", "english": "banana", "chinese": "香蕉", "phonetic": "/bəˈnænə/", "bbox": { "x": 25, "y": 34, "w": 10, "h": 12 }, "x": 30, "y": 40, "labelSide": "top-left", "curvature": 10 }],
   "keyVocabulary": [{ "english": "...", "chinese": "...", "phonetic": "/.../", "partOfSpeech": "n." }],
   "naturalPhrases": [{ "english": "...", "chinese": "..." }],
   "usefulPatterns": [{ "pattern": "...", "meaning": "...", "example": "..." }],
@@ -417,7 +573,113 @@ ${userPrompt ? `用户特别补充要求: ${userPrompt}` : ''}
       if (visionKey && visionKey !== 'MY_VISION_API_KEY') {
         console.log('[SnapLearn Server] GEMINI_API_KEY not present, trying vision model chain...');
         try {
-          const { cardData, model } = await callVisionAPI(cleanBase64, safeMimeType, promptText);
+          // 文案与定位并行：定位单独走一次精简输出，坐标精度远高于"一次生成全部 JSON"
+          const [contentRes, groundingRes] = await Promise.allSettled([
+            callVisionRaw(promptText, cleanBase64, safeMimeType),
+            callVisionRaw(GROUNDING_PROMPT(userPrompt), cleanBase64, safeMimeType),
+          ]);
+
+          if (contentRes.status === 'rejected') throw contentRes.reason;
+
+          const cardData = extractJson(contentRes.value.content);
+          let model = contentRes.value.model;
+
+          if (groundingRes.status === 'fulfilled') {
+            const grounded = parseGroundingText(groundingRes.value.content);
+            if (grounded.length >= 2) {
+              const contentItems: any[] = Array.isArray(cardData.detectedItems) ? cardData.detectedItems : [];
+              const keyVocab: any[] = Array.isArray(cardData.keyVocabulary) ? cardData.keyVocabulary : [];
+              const hasCjk = /[\u4e00-\u9fff]/;
+              // 文案模型可能用不同中文描述同一物体（如"调速器" vs "控制器"），用模糊匹配 + 最近位置找回英文/音标
+              const buildCandidates = () => {
+                const arr: Array<{ english: string; chinese: string; phonetic: string; x: number; y: number }> = [];
+                contentItems.forEach((ci) => {
+                  arr.push({
+                    english: String(ci.english || '').trim(),
+                    chinese: String(ci.chinese || '').trim(),
+                    phonetic: String(ci.phonetic || '').trim(),
+                    x: Number(ci.x) || 50,
+                    y: Number(ci.y) || 50,
+                  });
+                });
+                keyVocab.forEach((v) => {
+                  arr.push({
+                    english: String(v.english || '').trim(),
+                    chinese: String(v.chinese || '').trim(),
+                    phonetic: String(v.phonetic || '').trim(),
+                    x: 50,
+                    y: 50,
+                  });
+                });
+                return arr.filter((c) => c.english);
+              };
+              const candidates = buildCandidates();
+              const cjkChars = (s: string) => (s.match(/[\u4e00-\u9fff]/g) || []);
+              const matchLabel = (it: { english: string; chinese: string; box: { x: number; y: number; w: number; h: number } }) => {
+                const gx = it.box.x + it.box.w / 2;
+                const gy = it.box.y + it.box.h / 2;
+                const gCjk = cjkChars(it.chinese).join('');
+                let best: any = null;
+                let bestScore = 0;
+                for (const c of candidates) {
+                  const cCjk = cjkChars(c.chinese).join('');
+                  let score = 0;
+                  if (cCjk && gCjk) {
+                    if (cCjk === gCjk) score = 100;
+                    else if (gCjk.includes(cCjk) || cCjk.includes(gCjk)) score = 70;
+                    else {
+                      const common = new Set([...gCjk].filter((ch) => cCjk.includes(ch))).size;
+                      const total = new Set([...gCjk, ...cCjk]).size || 1;
+                      score = 40 * (common / total);
+                    }
+                  }
+                  // 位置距离加成（文案坐标不准，但仍可作弱信号）
+                  const dist = Math.hypot(c.x - gx, c.y - gy);
+                  score += Math.max(0, 25 - dist * 0.25);
+                  if (score > bestScore) {
+                    bestScore = score;
+                    best = c;
+                  }
+                }
+                return best;
+              };
+              cardData.detectedItems = grounded.map((it, i) => {
+                let english = it.english;
+                let phonetic = it.phonetic;
+                if (hasCjk.test(english)) {
+                  const match = matchLabel(it);
+                  if (match && !hasCjk.test(match.english)) {
+                    english = match.english;
+                    phonetic = match.phonetic || phonetic;
+                  }
+                }
+                return {
+                  id: `item-${i + 1}`,
+                  english,
+                  chinese: it.chinese,
+                  phonetic,
+                  x: it.box.x + it.box.w / 2,
+                  y: it.box.y + it.box.h / 2,
+                  bbox: it.box,
+                  labelSide: pickLabelSide(it.box),
+                  curvature: 0,
+                };
+              });
+              const ux = Math.min(...grounded.map((g) => g.box.x));
+              const uy = Math.min(...grounded.map((g) => g.box.y));
+              const ur = Math.max(...grounded.map((g) => g.box.x + g.box.w));
+              const ub = Math.max(...grounded.map((g) => g.box.y + g.box.h));
+              cardData.subjectBBox = { x: ux, y: uy, w: ur - ux, h: ub - uy };
+              model = `${contentRes.value.model} + ${groundingRes.value.model}(grounding)`;
+              console.log(`[SnapLearn Server] Grounding OK: ${grounded.length} items`);
+            }
+          } else {
+            console.warn(
+              '[SnapLearn] 定位阶段失败，回退使用文案阶段坐标:',
+              (groundingRes.reason as any)?.message?.slice(0, 120)
+            );
+          }
+
           console.log(`[SnapLearn Server] Card generated by model: ${model}`);
           return res.json({ success: true, card: cardData, provider: model });
         } catch (visionErr: any) {

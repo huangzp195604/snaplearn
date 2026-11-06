@@ -29,6 +29,44 @@ export async function analyzeImageWithAI(
 
   const raw = data.card;
 
+  // 视觉模型有时返回 0-1000 归一化坐标而非百分比，统一换算，避免标注全被挤到右下角
+  const coordSamples: number[] = [];
+  (Array.isArray(raw.detectedItems) ? raw.detectedItems : []).forEach((it: any) => {
+    const b = it?.bbox || it;
+    ['x', 'y', 'w', 'h'].forEach((k) => {
+      const n = Number(b?.[k]);
+      if (Number.isFinite(n)) coordSamples.push(Math.abs(n));
+    });
+  });
+  if (raw.subjectBBox) {
+    ['x', 'y', 'w', 'h'].forEach((k) => {
+      const n = Number(raw.subjectBBox[k]);
+      if (Number.isFinite(n)) coordSamples.push(Math.abs(n));
+    });
+  }
+  const maxCoord = coordSamples.length ? Math.max(...coordSamples) : 100;
+  const coordScale = maxCoord > 105 ? 0.1 : maxCoord > 1.5 ? 1 : 100;
+  const scaleBox = (b: any) => {
+    let x = Number(b.x) * coordScale;
+    let y = Number(b.y) * coordScale;
+    let w = Number(b.w) * coordScale;
+    let h = Number(b.h) * coordScale;
+    if (w < 0) {
+      x += w;
+      w = -w;
+    }
+    if (h < 0) {
+      y += h;
+      h = -h;
+    }
+    return {
+      x: Math.min(98, Math.max(0, x)),
+      y: Math.min(98, Math.max(0, y)),
+      w: Math.min(100, Math.max(1, w)),
+      h: Math.min(100, Math.max(1, h)),
+    };
+  };
+
   const card: LearningCard = {
     id: `card-${Date.now()}`,
     title: raw.headline || 'a moment Captured in time',
@@ -43,29 +81,36 @@ export async function analyzeImageWithAI(
           moodNote: typeof raw.posterStyle.moodNote === 'string' ? raw.posterStyle.moodNote : undefined,
         }
       : undefined,
+    // 视觉模型有时返回 0-1000 归一化坐标而非百分比，统一换算，避免标注全被挤到右下角
     subjectBBox:
       raw.subjectBBox &&
       [raw.subjectBBox.x, raw.subjectBBox.y, raw.subjectBBox.w, raw.subjectBBox.h].every(
         (n: any) => typeof n === 'number'
       )
-        ? {
-            x: raw.subjectBBox.x,
-            y: raw.subjectBBox.y,
-            w: raw.subjectBBox.w,
-            h: raw.subjectBBox.h,
-          }
+        ? scaleBox(raw.subjectBBox)
         : undefined,
     floatingPhrases: raw.floatingPhrases || [],
-    detectedItems: (raw.detectedItems || []).map((item: any, idx: number) => ({
-      id: item.id || `item-${idx}`,
-      english: item.english,
-      chinese: item.chinese,
-      phonetic: item.phonetic || '',
-      x: typeof item.x === 'number' ? item.x : 50,
-      y: typeof item.y === 'number' ? item.y : 50,
-      labelSide: item.labelSide || 'top',
-      curvature: item.curvature || 0,
-    })),
+    detectedItems: (raw.detectedItems || []).map((item: any, idx: number) => {
+      // 优先用物体包围盒中心作为锚点，比 AI 估计的单点更准
+      const bbox =
+        item.bbox &&
+        [item.bbox.x, item.bbox.y, item.bbox.w, item.bbox.h].every((n: any) => typeof n === 'number')
+          ? scaleBox(item.bbox)
+          : undefined;
+      const x = bbox ? bbox.x + bbox.w / 2 : typeof item.x === 'number' ? Math.min(100, Math.max(0, item.x * coordScale)) : 50;
+      const y = bbox ? bbox.y + bbox.h / 2 : typeof item.y === 'number' ? Math.min(100, Math.max(0, item.y * coordScale)) : 50;
+      return {
+        id: item.id || `item-${idx}`,
+        english: item.english,
+        chinese: item.chinese,
+        phonetic: item.phonetic || '',
+        x,
+        y,
+        bbox,
+        labelSide: item.labelSide || 'top',
+        curvature: item.curvature || 0,
+      };
+    }),
     keyVocabulary: raw.keyVocabulary || [],
     naturalPhrases: raw.naturalPhrases || [],
     usefulPatterns: raw.usefulPatterns || [],

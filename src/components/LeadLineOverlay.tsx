@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Volume2, Edit3, Move, Check, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { DetectedItem } from '../types';
-import { speakEnglish } from '../utils/speech';
+import { speakEnglish, EnglishAccent } from '../utils/speech';
 
 interface LeadLineOverlayProps {
   items: DetectedItem[];
@@ -11,6 +11,7 @@ interface LeadLineOverlayProps {
   onEditItem: (item: DetectedItem) => void;
   isEditingMode: boolean;
   setIsEditingMode: (editing: boolean) => void;
+  accent?: EnglishAccent;  // 当前选的口音（US/UK），用于发音
 }
 
 export const LeadLineOverlay: React.FC<LeadLineOverlayProps> = ({
@@ -21,6 +22,7 @@ export const LeadLineOverlay: React.FC<LeadLineOverlayProps> = ({
   onEditItem,
   isEditingMode,
   setIsEditingMode,
+  accent = 'US',
 }) => {
   const [isVisible, setIsVisible] = useState(true);
   const [activeSpeechId, setActiveSpeechId] = useState<string | null>(null);
@@ -28,17 +30,16 @@ export const LeadLineOverlay: React.FC<LeadLineOverlayProps> = ({
   const [dragTarget, setDragTarget] = useState<'pin' | 'label' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Handle word pronunciation
+  // Handle word pronunciation（跟随当前选择的英/美音）
   const handlePlayAudio = (e: React.MouseEvent, item: DetectedItem) => {
     e.stopPropagation();
     setActiveSpeechId(item.id);
-    speakEnglish(
-      item.english,
-      0.9,
-      undefined,
-      () => setActiveSpeechId(null),
-      () => setActiveSpeechId(null)
-    );
+    speakEnglish(item.english, {
+      rate: 0.9,
+      accent,
+      onEnd: () => setActiveSpeechId(null),
+      onError: () => setActiveSpeechId(null),
+    });
   };
 
   // Dragging logic for fine-tuning coordinates
@@ -208,20 +209,33 @@ export const LeadLineOverlay: React.FC<LeadLineOverlayProps> = ({
           const cpX = (pinX + targetX) / 2 + (item.curvature || 0);
           const cpY = (pinY + targetY) / 2 - 10;
 
+          // 箭头：指向物品的马克笔式手绘箭头
+          const angle = Math.atan2(pinY - targetY, pinX - targetX);
+          const ax1 = pinX - 9 * Math.cos(angle - 0.45);
+          const ay1 = pinY - 9 * Math.sin(angle - 0.45);
+          const ax2 = pinX - 9 * Math.cos(angle + 0.45);
+          const ay2 = pinY - 9 * Math.sin(angle + 0.45);
+
           return (
             <g key={`line-${item.id}`}>
               {/* Outer delicate circle around pin */}
-              <circle cx={pinX} cy={pinY} r="6.5" fill="none" stroke="#ffffff" strokeWidth="1.5" />
+              <circle cx={pinX} cy={pinY} r="6" fill="none" stroke="#ffffff" strokeWidth="1.4" />
               {/* Inner solid white dot */}
-              <circle cx={pinX} cy={pinY} r="2.5" fill="#ffffff" />
+              <circle cx={pinX} cy={pinY} r="2.2" fill="#ffffff" />
 
-              {/* Hand-drawn style dashed curved line */}
+              {/* 参考海报的白色马克笔引线（实线 + 箭头） */}
               <path
-                d={`M ${pinX} ${pinY} Q ${cpX} ${cpY} ${targetX} ${targetY}`}
+                d={`M ${targetX} ${targetY} Q ${cpX} ${cpY} ${pinX} ${pinY}`}
                 fill="none"
                 stroke="#ffffff"
-                strokeWidth="1.8"
-                strokeDasharray="3 3"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+              />
+              <path
+                d={`M ${ax1} ${ay1} L ${pinX} ${pinY} L ${ax2} ${ay2}`}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="2.2"
                 strokeLinecap="round"
               />
             </g>
@@ -279,27 +293,30 @@ export const LeadLineOverlay: React.FC<LeadLineOverlayProps> = ({
               }}
               onMouseDown={(e) => handleMouseDown(e, item.id, 'label')}
               onTouchStart={(e) => handleTouchStart(e, item.id, 'label')}
-              className={`absolute group z-20 flex items-center gap-1.5 px-2 py-1 rounded-xl transition-all select-none ${
+              className={`absolute group z-20 flex items-center gap-1 transition-all select-none ${
                 isEditingMode
-                  ? 'cursor-move ring-2 ring-amber-400 bg-black/85 border border-amber-400 text-white shadow-xl backdrop-blur-sm'
-                  : 'bg-black/35 hover:bg-black/70 backdrop-blur-[2px] border border-white/20 hover:border-white/40 shadow-[0_2px_10px_rgba(0,0,0,0.6)]'
+                  ? 'cursor-move px-2 py-1 rounded-xl ring-2 ring-amber-400 bg-black/85 border border-amber-400 text-white shadow-xl backdrop-blur-sm'
+                  : 'px-1 py-0.5 rounded-md hover:bg-black/30'
               }`}
             >
-              {/* Word info */}
+              {/* Word info —— 参考海报的手写马克笔标注 */}
               <div
-                className="flex flex-col text-center leading-tight cursor-pointer"
+                className="flex flex-col items-center leading-tight cursor-pointer"
                 onClick={(e) => handlePlayAudio(e, item)}
                 title="点击朗读发音"
               >
                 <span
-                  className="text-[15px] sm:text-[17px] font-extrabold tracking-tight text-white font-serif drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.9)]"
-                  style={{ textShadow: '0 2px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.6)' }}
+                  className="text-[16px] sm:text-[18px] font-extrabold tracking-tight text-white"
+                  style={{
+                    fontFamily: "'Caveat', 'Patrick Hand', cursive, sans-serif",
+                    textShadow: '0 2px 4px rgba(0,0,0,0.95), 0 0 10px rgba(0,0,0,0.7)',
+                  }}
                 >
                   {item.english}
                 </span>
                 <span
-                  className="text-[11px] sm:text-[12px] font-medium text-amber-200/95 tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
-                  style={{ textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}
+                  className="text-[11px] sm:text-[12px] font-medium text-[#FFE58F] tracking-wide border-b border-white/50 pb-0.5"
+                  style={{ textShadow: '0 1px 3px rgba(0,0,0,0.95)' }}
                 >
                   {item.chinese}
                 </span>

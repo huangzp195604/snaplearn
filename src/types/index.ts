@@ -3,8 +3,10 @@ export interface DetectedItem {
   english: string;
   chinese: string;
   phonetic: string;
-  x: number; // 0 - 100 percentage
-  y: number; // 0 - 100 percentage
+  x: number; // 0 - 100 percentage（物体包围盒中心）
+  y: number; // 0 - 100 percentage（物体包围盒中心）
+  /** AI 返回的物体包围盒（百分比坐标），用于校准标注锚点 */
+  bbox?: { x: number; y: number; w: number; h: number };
   labelSide?: 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
   curvature?: number;
   labelOffsetX?: number; // Manual user drag adjustment in px or %
